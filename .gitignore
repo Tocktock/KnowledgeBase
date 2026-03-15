@@ -1,0 +1,12 @@
+.DS_Store
+internal_kb_fullstack/.env
+internal_kb_fullstack/backend/.env
+internal_kb_fullstack/backend/.venv/
+internal_kb_fullstack/backend/.venv312/
+internal_kb_fullstack/backend/.pytest_cache/
+internal_kb_fullstack/backend/**/__pycache__/
+internal_kb_fullstack/backend/**/*.pyc
+internal_kb_fullstack/backend/*.egg-info/
+internal_kb_fullstack/frontend/node_modules/
+internal_kb_fullstack/frontend/.next/
+internal_kb_fullstack/frontend/tsconfig.tsbuildinfo
