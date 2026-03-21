@@ -33,7 +33,13 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import type { IngestDocumentRequest, IngestDocumentResponse } from '@/lib/types'
+import type {
+  DefinitionDraftReference,
+  GenerateDefinitionDraftRequest,
+  GenerateDefinitionDraftResponse,
+  IngestDocumentRequest,
+  IngestDocumentResponse,
+} from '@/lib/types'
 import { slugify } from '@/lib/utils'
 
 type EditorMode = 'visual' | 'source' | 'preview'
@@ -61,6 +67,19 @@ async function uploadDocument(formData: FormData) {
     throw new Error('detail' in data ? data.detail ?? '파일 업로드에 실패했습니다.' : '파일 업로드에 실패했습니다.')
   }
   return data as IngestDocumentResponse
+}
+
+async function generateDefinitionDraft(payload: GenerateDefinitionDraftRequest) {
+  const response = await fetch('/api/documents/generate-definition', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const data = (await response.json()) as GenerateDefinitionDraftResponse | { detail?: string }
+  if (!response.ok) {
+    throw new Error('detail' in data ? data.detail ?? '정의 초안 생성에 실패했습니다.' : '정의 초안 생성에 실패했습니다.')
+  }
+  return data as GenerateDefinitionDraftResponse
 }
 
 function ToolbarButton({
@@ -98,6 +117,9 @@ export function DocumentEditor() {
   const [status, setStatus] = useState<'draft' | 'published' | 'archived'>('published')
   const [sourceUrl, setSourceUrl] = useState('')
   const [markdown, setMarkdown] = useState('# 새 문서\n\n여기에 내용을 작성하세요.')
+  const [definitionTopic, setDefinitionTopic] = useState('')
+  const [definitionDomain, setDefinitionDomain] = useState('')
+  const [generatedReferences, setGeneratedReferences] = useState<DefinitionDraftReference[]>([])
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -128,6 +150,14 @@ export function DocumentEditor() {
     },
   })
 
+  useEffect(() => {
+    if (!editor) return
+    const currentMarkdown = editor.getMarkdown()
+    if (currentMarkdown !== markdown) {
+      editor.commands.setContent(markdown, { contentType: 'markdown' })
+    }
+  }, [editor, markdown])
+
   const createMutation = useMutation({
     mutationFn: ingestDocument,
     onSuccess(data) {
@@ -149,11 +179,28 @@ export function DocumentEditor() {
     },
   })
 
+  const generateMutation = useMutation({
+    mutationFn: generateDefinitionDraft,
+    onSuccess(data) {
+      setError(null)
+      setGeneratedReferences(data.references)
+      setTitle((current) => current.trim() || data.title)
+      setSlug((current) => current.trim() || data.slug)
+      setStatus('draft')
+      setMarkdown(data.markdown)
+      setMode('visual')
+    },
+    onError(err) {
+      setError(err instanceof Error ? err.message : '정의 초안 생성에 실패했습니다.')
+    },
+  })
+
   const submitDisabled = !title.trim() || !slug.trim() || !markdown.trim() || createMutation.isPending
   const tips = useMemo(
     () => [
       '[[slug]] 또는 [[slug|표시명]] 문법을 그대로 써도 됩니다.',
       '시각 편집 모드와 위키 소스 모드를 즉시 전환할 수 있습니다.',
+      '정의 초안 생성은 기존 문서를 검색해 인용과 함께 편집 가능한 Markdown을 채웁니다.',
       '저장하면 백엔드가 바로 청크를 만들고 임베딩 작업을 큐에 넣습니다.',
     ],
     [],
@@ -207,6 +254,16 @@ export function DocumentEditor() {
       return
     }
     await uploadMutation.mutateAsync(form)
+  }
+
+  const handleGenerateDefinition = () => {
+    setError(null)
+    generateMutation.mutate({
+      topic: definitionTopic.trim(),
+      domain: definitionDomain.trim() || undefined,
+      doc_type: docType || undefined,
+      owner_team: ownerTeam || undefined,
+    })
   }
 
   return (
@@ -338,6 +395,43 @@ export function DocumentEditor() {
         </form>
 
         <div className="space-y-6">
+          <Card className="p-5">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+              <Sparkles className="size-4 text-blue-500" /> 정의 초안 생성
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">정의할 주제</label>
+                <Input value={definitionTopic} onChange={(event) => setDefinitionTopic(event.target.value)} placeholder="예: Transport" />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">도메인 / 맥락</label>
+                <Input value={definitionDomain} onChange={(event) => setDefinitionDomain(event.target.value)} placeholder="예: delivery operations" />
+              </div>
+              <div className="rounded-2xl bg-neutral-50 px-4 py-3 text-xs leading-6 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
+                현재 입력한 문서 타입과 소유 팀 값을 검색 필터로 함께 사용합니다. 생성된 내용은 자동 저장되지 않고, 편집기 안에 초안으로만 채워집니다.
+              </div>
+              <Button type="button" className="w-full" onClick={handleGenerateDefinition} disabled={!definitionTopic.trim() || generateMutation.isPending}>
+                {generateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                정의 초안 만들기
+              </Button>
+              {generatedReferences.length ? (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">References Used</div>
+                  {generatedReferences.map((reference) => (
+                    <div key={`${reference.document_slug}-${reference.index}`} className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm dark:border-neutral-800">
+                      <a href={`/docs/${reference.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
+                        [{reference.index}] {reference.document_title}
+                      </a>
+                      {reference.section_title ? <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{reference.section_title}</div> : null}
+                      <div className="mt-2 text-xs leading-6 text-neutral-500 dark:text-neutral-400">{reference.excerpt}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </Card>
+
           <Card className="p-5">
             <div className="mb-3 text-sm font-semibold text-neutral-900 dark:text-neutral-50">작성 팁</div>
             <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">

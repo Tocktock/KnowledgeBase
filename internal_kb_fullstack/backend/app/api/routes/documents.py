@@ -17,6 +17,8 @@ from app.schemas.documents import (
     DocumentRelationsResponse,
     DocumentSummary,
     DocumentViewResponse,
+    GenerateDefinitionDraftRequest,
+    GenerateDefinitionDraftResponse,
     HeadingSummary,
     IngestDocumentRequest,
     IngestDocumentResponse,
@@ -24,6 +26,12 @@ from app.schemas.documents import (
 )
 from app.schemas.jobs import JobSummary
 from app.services.catalog import get_document_by_slug, get_document_detail, list_documents
+from app.services.document_drafts import (
+    DefinitionDraftConfigError,
+    DefinitionDraftGenerationError,
+    DefinitionDraftNotFoundError,
+    generate_definition_draft,
+)
 from app.services.ingest import ingest_document
 from app.services.jobs import request_document_reindex
 from app.services.parser import DocumentParser
@@ -152,6 +160,21 @@ async def upload_document_route(
         job=_job_summary(result.job),
         unchanged=result.unchanged,
     )
+
+
+@router.post("/generate-definition", response_model=GenerateDefinitionDraftResponse)
+async def generate_definition_route(
+    payload: GenerateDefinitionDraftRequest,
+    session: AsyncSession = Depends(get_db_session),
+) -> GenerateDefinitionDraftResponse:
+    try:
+        return await generate_definition_draft(session, payload)
+    except DefinitionDraftNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DefinitionDraftConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except DefinitionDraftGenerationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/slug/{slug}", response_model=DocumentViewResponse)

@@ -31,7 +31,15 @@ class Settings(BaseSettings):
     embedding_max_input_tokens: int = 8192
     embedding_request_max_total_tokens: int = 6000
     embedding_batch_size: int = 32
+    embedding_batch_concurrency: int = 1
     embedding_timeout_seconds: int = 60
+    generation_api_key: str = ""
+    generation_base_url: str | None = None
+    generation_model: str = ""
+    generation_temperature: float = 0.2
+    generation_timeout_seconds: int = 90
+    generation_reference_limit: int = 8
+    generation_search_limit: int = 12
 
     chunk_target_tokens: int = 600
     chunk_max_tokens: int = 800

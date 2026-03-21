@@ -155,3 +155,33 @@ export type IngestDocumentResponse = {
   job?: JobSummary | null
   unchanged: boolean
 }
+
+export type DefinitionDraftReference = {
+  index: number
+  document_id: string
+  document_title: string
+  document_slug: string
+  source_system: string
+  source_url?: string | null
+  section_title?: string | null
+  heading_path: string[]
+  excerpt: string
+}
+
+export type GenerateDefinitionDraftRequest = {
+  topic: string
+  domain?: string
+  doc_type?: string
+  source_system?: string
+  owner_team?: string
+  reference_limit?: number
+  search_limit?: number
+}
+
+export type GenerateDefinitionDraftResponse = {
+  title: string
+  slug: string
+  query: string
+  markdown: string
+  references: DefinitionDraftReference[]
+}

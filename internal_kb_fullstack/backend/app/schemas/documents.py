@@ -26,6 +26,36 @@ class IngestDocumentRequest(BaseModel):
     priority: int = 100
 
 
+class GenerateDefinitionDraftRequest(BaseModel):
+    topic: str = Field(..., min_length=1)
+    domain: str | None = None
+    doc_type: str | None = None
+    source_system: str | None = None
+    owner_team: str | None = None
+    reference_limit: int | None = Field(default=None, ge=3, le=12)
+    search_limit: int | None = Field(default=None, ge=5, le=40)
+
+
+class DefinitionDraftReference(BaseModel):
+    index: int
+    document_id: UUID
+    document_title: str
+    document_slug: str
+    source_system: str
+    source_url: str | None = None
+    section_title: str | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    excerpt: str
+
+
+class GenerateDefinitionDraftResponse(BaseModel):
+    title: str
+    slug: str
+    query: str
+    markdown: str
+    references: list[DefinitionDraftReference] = Field(default_factory=list)
+
+
 class DocumentSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
