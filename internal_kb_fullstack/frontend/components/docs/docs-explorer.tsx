@@ -8,31 +8,49 @@ import { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import type { DocsDomainPreset } from '@/lib/document-domains'
 import type { DocumentListResponse } from '@/lib/types'
 import { formatDate, formatDocTypeLabel, formatOwnerTeamLabel, formatStatusLabel, sentence } from '@/lib/utils'
 
-async function fetchDocuments(params: Record<string, string>) {
-  const search = new URLSearchParams(params)
+type DocumentQueryValue = string | string[]
+
+async function fetchDocuments(params: Record<string, DocumentQueryValue>) {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (Array.isArray(value)) {
+      value.forEach((item) => search.append(key, item))
+      continue
+    }
+    search.set(key, value)
+  }
   const response = await fetch(`/api/documents?${search.toString()}`)
   if (!response.ok) throw new Error('문서 목록을 불러오지 못했습니다.')
   return (await response.json()) as DocumentListResponse
 }
 
-export function DocsExplorer() {
+type DocsExplorerProps = {
+  preset?: DocsDomainPreset
+}
+
+export function DocsExplorer({ preset }: DocsExplorerProps) {
   const [query, setQuery] = useState('')
   const [ownerTeam, setOwnerTeam] = useState('')
   const [docType, setDocType] = useState('')
 
   const params = useMemo(() => {
-    const next: Record<string, string> = { limit: '40' }
+    const next: Record<string, DocumentQueryValue> = { limit: '40' }
     if (query.trim()) next.query = query.trim()
     if (ownerTeam.trim()) next.owner_team = ownerTeam.trim()
-    if (docType.trim()) next.doc_type = docType.trim()
+    if (preset?.docTypes.length) {
+      next.doc_type = preset.docTypes
+    } else if (docType.trim()) {
+      next.doc_type = docType.trim()
+    }
     return next
-  }, [docType, ownerTeam, query])
+  }, [docType, ownerTeam, preset, query])
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['documents', params],
+    queryKey: ['documents', params, preset?.key ?? 'all'],
     queryFn: () => fetchDocuments(params),
   })
 
@@ -45,7 +63,19 @@ export function DocsExplorer() {
         <div className="grid gap-3 md:grid-cols-3">
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="제목 / 문서 주소 / 본문 검색" />
           <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="소유 그룹 필터" />
-          <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="문서 타입 필터" />
+          {preset ? (
+            <div className="rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
+              <div className="text-xs font-medium text-neutral-500">적용된 문서 타입</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {preset.docTypes.map((item) => (
+                  <Badge key={item}>{formatDocTypeLabel(item)}</Badge>
+                ))}
+              </div>
+              <div className="mt-2 text-xs text-neutral-500">{preset.title}만 보이도록 고정되어 있습니다.</div>
+            </div>
+          ) : (
+            <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="문서 타입 필터" />
+          )}
         </div>
       </Card>
 

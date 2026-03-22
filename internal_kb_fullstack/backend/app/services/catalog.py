@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy import case, func, literal, or_, select
@@ -15,12 +15,13 @@ async def list_documents(
     *,
     q: str | None = None,
     owner_team: str | None = None,
-    doc_type: str | None = None,
+    doc_types: Iterable[str] | None = None,
     status: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
     current_revision = aliased(DocumentRevision)
+    normalized_doc_types = tuple(dict.fromkeys(doc_type for doc_type in (doc_types or []) if doc_type))
 
     filters = []
     if q:
@@ -34,8 +35,8 @@ async def list_documents(
         )
     if owner_team:
         filters.append(Document.owner_team == owner_team)
-    if doc_type:
-        filters.append(Document.doc_type == doc_type)
+    if normalized_doc_types:
+        filters.append(Document.doc_type.in_(normalized_doc_types))
     if status:
         filters.append(Document.status == status)
 

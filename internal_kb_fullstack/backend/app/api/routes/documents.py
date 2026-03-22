@@ -102,7 +102,7 @@ def _slug_conflict_detail(document: Document) -> dict[str, object]:
 async def list_documents_route(
     q: str | None = Query(default=None, alias="query"),
     owner_team: str | None = None,
-    doc_type: str | None = None,
+    doc_type: list[str] | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -112,7 +112,7 @@ async def list_documents_route(
         session,
         q=q,
         owner_team=owner_team,
-        doc_type=doc_type,
+        doc_types=doc_type,
         status=status_filter,
         limit=limit,
         offset=offset,
