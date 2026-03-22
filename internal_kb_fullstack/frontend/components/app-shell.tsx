@@ -17,7 +17,7 @@ const navItems = [
   { href: '/', label: '홈', icon: Home },
   { href: '/search', label: '시맨틱 검색', icon: Search },
   { href: '/docs', label: '문서 탐색', icon: BookOpenText },
-  { href: '/glossary', label: '글로서리', icon: BookMarked },
+  { href: '/glossary', label: '용어집', icon: BookMarked },
   { href: '/glossary/review', label: '리뷰 스튜디오', icon: Sparkles },
   { href: '/new', label: '새 문서', icon: PlusSquare },
   { href: '/jobs', label: '인덱싱 작업', icon: Workflow },

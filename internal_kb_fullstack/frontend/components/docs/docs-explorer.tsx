@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import type { DocumentListResponse } from '@/lib/types'
-import { formatDate, sentence } from '@/lib/utils'
+import { formatDate, formatDocTypeLabel, sentence } from '@/lib/utils'
 
 async function fetchDocuments(params: Record<string, string>) {
   const search = new URLSearchParams(params)
@@ -73,7 +73,7 @@ export function DocsExplorer() {
                       </div>
                       <div className="text-xs text-neutral-400">/{item.slug}</div>
                     </div>
-                    <Badge>{item.doc_type}</Badge>
+                    <Badge>{formatDocTypeLabel(item.doc_type)}</Badge>
                   </div>
                   <p className="mb-4 line-clamp-4 text-sm leading-7 text-neutral-600 dark:text-neutral-400">{sentence(item.excerpt, 220)}</p>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">

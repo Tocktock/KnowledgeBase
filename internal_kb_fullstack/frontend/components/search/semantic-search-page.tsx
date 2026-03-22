@@ -70,7 +70,7 @@ export function SemanticSearchPage() {
           <Badge>concept-aware reranking</Badge>
           <Badge>semantic + keyword</Badge>
           <Badge>evidence diversification</Badge>
-          <Badge>glossary-first exact match</Badge>
+          <Badge>용어집 우선 exact match</Badge>
         </div>
       </Card>
 

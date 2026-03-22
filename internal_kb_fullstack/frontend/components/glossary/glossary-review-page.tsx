@@ -14,6 +14,7 @@ import type {
   GlossaryConceptSummary,
   JobSummary,
 } from '@/lib/types'
+import { formatDocTypeLabel } from '@/lib/utils'
 
 async function fetchGlossaryList(params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams()
@@ -21,13 +22,13 @@ async function fetchGlossaryList(params: Record<string, string | number | undefi
     if (value !== undefined && value !== '') search.set(key, String(value))
   })
   const response = await fetch(`/api/glossary?${search.toString()}`)
-  if (!response.ok) throw new Error('글로서리 목록을 불러오지 못했습니다.')
+  if (!response.ok) throw new Error('용어집 목록을 불러오지 못했습니다.')
   return (await response.json()) as GlossaryConceptListResponse
 }
 
 async function fetchConcept(id: string) {
   const response = await fetch(`/api/glossary/${id}`)
-  if (!response.ok) throw new Error('글로서리 상세를 불러오지 못했습니다.')
+  if (!response.ok) throw new Error('용어집 상세를 불러오지 못했습니다.')
   return (await response.json()) as GlossaryConceptDetailResponse
 }
 
@@ -37,7 +38,7 @@ async function refreshGlossary(scope: 'full' | 'incremental') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ scope }),
   })
-  if (!response.ok) throw new Error('글로서리 리프레시를 시작하지 못했습니다.')
+  if (!response.ok) throw new Error('용어집 리프레시를 시작하지 못했습니다.')
   return (await response.json()) as JobSummary
 }
 
@@ -62,7 +63,7 @@ async function updateConcept(id: string, payload: Record<string, unknown>) {
   })
   if (!response.ok) {
     const body = (await response.json()) as { detail?: string }
-    throw new Error(body.detail || '글로서리 상태 변경에 실패했습니다.')
+    throw new Error(body.detail || '용어집 상태 변경에 실패했습니다.')
   }
   return (await response.json()) as GlossaryConceptDetailResponse
 }
@@ -105,7 +106,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
         setSelectedId(data.items[0]?.id ?? null)
       }
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '글로서리 목록을 불러오지 못했습니다.')
+      setError(nextError instanceof Error ? nextError.message : '용어집 목록을 불러오지 못했습니다.')
     } finally {
       setLoadingList(false)
     }
@@ -164,7 +165,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
       <Card className="p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">글로서리 리뷰 스튜디오</h1>
+            <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">용어집 리뷰 스튜디오</h1>
             <p className="mt-2 text-sm leading-7 text-neutral-500">
               개념 마이닝 결과를 검토하고, 근거를 확인하고, 초안 생성과 승인 상태를 운영합니다.
             </p>
@@ -253,7 +254,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <Button type="button" onClick={() => detail && void runAction(() => generateDraft(detail.concept.id, draftDomain), '글로서리 초안을 생성했습니다.')} disabled={acting || !detail}>
+                  <Button type="button" onClick={() => detail && void runAction(() => generateDraft(detail.concept.id, draftDomain), '용어집 초안을 생성했습니다.')} disabled={acting || !detail}>
                     {acting ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                     Draft 생성
                   </Button>
@@ -334,7 +335,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                     <div className="mb-2 flex flex-wrap gap-2">
                       <Badge>{support.evidence_kind}</Badge>
                       <Badge>{support.evidence_strength.toFixed(2)}</Badge>
-                      <Badge>{support.document_doc_type}</Badge>
+                      <Badge>{formatDocTypeLabel(support.document_doc_type)}</Badge>
                     </div>
                     <Link href={`/docs/${support.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
                       {support.document_title}

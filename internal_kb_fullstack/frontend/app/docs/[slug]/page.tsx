@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getDocumentBySlug, getDocumentRelations } from '@/lib/api/server'
 import type { DocumentRelationsResponse } from '@/lib/types'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatDocTypeLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +27,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
         <Card className="overflow-hidden p-7 md:p-8">
           <div className="mb-4 flex flex-wrap gap-2">
             <Badge className={data.document.doc_type === 'glossary' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300' : ''}>
-              {data.document.doc_type}
+              {formatDocTypeLabel(data.document.doc_type)}
             </Badge>
             <Badge>{data.document.status}</Badge>
             {data.document.owner_team ? <Badge>{data.document.owner_team}</Badge> : null}

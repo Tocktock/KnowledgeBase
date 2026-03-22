@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConcepts, getJobs, getRecentDocuments } from '@/lib/api/server'
 import type { DocumentListItem, GlossaryConceptSummary, JobSummary } from '@/lib/types'
-import { formatDate, sentence } from '@/lib/utils'
+import { formatDate, formatDocTypeLabel, sentence } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,7 +41,7 @@ export default async function HomePage() {
           <div className="mt-6 flex flex-wrap gap-3">
             <Link href="/new"><Button><Sparkles className="size-4" /> 새 문서 작성</Button></Link>
             <Link href="/search"><Button variant="outline"><Brain className="size-4" /> 시맨틱 검색</Button></Link>
-            <Link href="/glossary"><Button variant="outline"><BookMarked className="size-4" /> 글로서리</Button></Link>
+            <Link href="/glossary"><Button variant="outline"><BookMarked className="size-4" /> 용어집</Button></Link>
             <Link href="/docs"><Button variant="outline"><BookOpenText className="size-4" /> 문서 탐색</Button></Link>
           </div>
         </div>
@@ -86,7 +86,7 @@ export default async function HomePage() {
           <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
             <div className="rounded-2xl bg-neutral-50 p-4 dark:bg-neutral-900">1. 새 문서를 작성하거나 기존 markdown/html 파일을 업로드합니다.</div>
             <div className="rounded-2xl bg-neutral-50 p-4 dark:bg-neutral-900">2. 백엔드가 청크와 임베딩을 만들고 검색 인덱스를 갱신합니다.</div>
-            <div className="rounded-2xl bg-neutral-50 p-4 dark:bg-neutral-900">3. 글로서리 리뷰 스튜디오에서 개념을 다듬고, 시맨틱 검색과 위키형 링크 탐색으로 연결된 지식을 찾습니다.</div>
+            <div className="rounded-2xl bg-neutral-50 p-4 dark:bg-neutral-900">3. 용어집 리뷰 스튜디오에서 개념을 다듬고, 시맨틱 검색과 위키형 링크 탐색으로 연결된 지식을 찾습니다.</div>
           </div>
         </Card>
       </div>
@@ -95,7 +95,7 @@ export default async function HomePage() {
         <Card className="p-6">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">승인된 글로서리</div>
+              <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">승인된 용어집</div>
               <div className="mt-1 text-sm text-neutral-500">정제된 개념 문서를 바로 탐색하세요.</div>
             </div>
             <Link href="/glossary" className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400">
@@ -107,7 +107,7 @@ export default async function HomePage() {
               <Link key={concept.id} href={`/glossary/${concept.slug}`}>
                 <Card className="h-full p-5 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:hover:border-blue-900">
                   <div className="mb-2 flex flex-wrap gap-2">
-                    <Badge>glossary</Badge>
+                    <Badge>용어집</Badge>
                     <Badge>{concept.concept_type}</Badge>
                     {concept.owner_team_hint ? <Badge>{concept.owner_team_hint}</Badge> : null}
                   </div>
@@ -138,7 +138,7 @@ export default async function HomePage() {
             <Link key={document.id} href={`/docs/${document.slug}`}>
               <Card className="h-full p-5 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:hover:border-blue-900">
                 <div className="mb-2 flex flex-wrap gap-2">
-                  <Badge>{document.doc_type}</Badge>
+                  <Badge>{formatDocTypeLabel(document.doc_type)}</Badge>
                   {document.owner_team ? <Badge>{document.owner_team}</Badge> : null}
                 </div>
                 <div className="mb-1 text-lg font-semibold text-neutral-950 dark:text-neutral-50">{document.title}</div>

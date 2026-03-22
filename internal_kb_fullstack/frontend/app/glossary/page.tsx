@@ -14,7 +14,7 @@ export default async function GlossaryPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">글로서리</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">용어집</h1>
         <p className="mt-2 text-sm leading-7 text-neutral-500">
           승인된 개념 문서를 중심으로 탐색하는 컨셉 레이어입니다.
         </p>
@@ -25,7 +25,7 @@ export default async function GlossaryPage() {
           <Link key={concept.id} href={`/glossary/${concept.slug}`}>
             <Card className="h-full p-5 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:hover:border-blue-900">
               <div className="mb-2 flex flex-wrap gap-2">
-                <Badge>glossary</Badge>
+                <Badge>용어집</Badge>
                 <Badge>{concept.concept_type}</Badge>
                 {concept.owner_team_hint ? <Badge>{concept.owner_team_hint}</Badge> : null}
               </div>

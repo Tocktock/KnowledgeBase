@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConceptBySlug } from '@/lib/api/server'
+import { formatDocTypeLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,7 +17,7 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
     <div className="space-y-6">
       <Card className="p-7 md:p-8">
         <div className="mb-4 flex flex-wrap gap-2">
-          <Badge>glossary</Badge>
+          <Badge>용어집</Badge>
           <Badge>{detail.concept.status}</Badge>
           <Badge>{detail.concept.concept_type}</Badge>
           {detail.concept.owner_team_hint ? <Badge>{detail.concept.owner_team_hint}</Badge> : null}
@@ -52,7 +53,7 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
               <div className="mb-2 flex flex-wrap gap-2">
                 <Badge>{support.evidence_kind}</Badge>
                 <Badge>{support.evidence_strength.toFixed(2)}</Badge>
-                <Badge>{support.document_doc_type}</Badge>
+                <Badge>{formatDocTypeLabel(support.document_doc_type)}</Badge>
               </div>
               <Link href={`/docs/${support.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
                 {support.document_title}

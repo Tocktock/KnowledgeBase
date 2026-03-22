@@ -502,7 +502,7 @@ export function DocumentEditor() {
               </div>
               <div>
                 <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 타입</label>
-                <Input value={generationDocType} onChange={(event) => setGenerationDocType(event.target.value)} placeholder="선택 입력 예: glossary" />
+                <Input value={generationDocType} onChange={(event) => setGenerationDocType(event.target.value)} placeholder="선택 입력 예: glossary (용어집)" />
               </div>
               <div className="rounded-2xl bg-neutral-50 px-4 py-3 text-xs leading-6 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
                 생성 필터는 선택 사항이며 저장 메타데이터와 분리되어 있습니다. 비워두면 전체 문서를 대상으로 검색하고, 생성된 내용은 자동 저장되지 않고 편집기 안에 초안으로만 채워집니다.

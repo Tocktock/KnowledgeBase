@@ -32,3 +32,8 @@ export function sentence(input?: string | null, limit = 180) {
 export function headingId(text: string) {
   return slugify(text)
 }
+
+export function formatDocTypeLabel(value?: string | null) {
+  if (!value) return ''
+  return value === 'glossary' ? '용어집' : value
+}
