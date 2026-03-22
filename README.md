@@ -226,8 +226,11 @@ What the script does:
 - checks that Docker and Docker Compose are available
 - finds `internal_kb_fullstack/`
 - creates missing `.env` files from `.env.example`
+- auto-fills missing local Ollama embedding / generation settings when compatible local models are detected
 - chooses a free host port for Postgres on first setup
 - runs `docker compose up -d --build`
+- if `sample-data/sendy-knowledge/` exists and embedding is configured, bootstraps the sample corpus once and skips duplicate re-imports on later runs
+- after a large first-time sample import, embedding jobs may continue in the background even though the stack is already up and glossary refresh has completed
 - waits until:
   - `http://localhost:8000/healthz`
   - `http://localhost:8000/readyz`

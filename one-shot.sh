@@ -7,6 +7,8 @@ ENV_FILE="$PROJECT_DIR/.env"
 ENV_EXAMPLE="$PROJECT_DIR/.env.example"
 BACKEND_ENV_FILE="$PROJECT_DIR/backend/.env"
 BACKEND_ENV_EXAMPLE="$PROJECT_DIR/backend/.env.example"
+SAMPLE_DATA_HOST_DIR="$ROOT_DIR/sample-data/sendy-knowledge"
+SAMPLE_DATA_CONTAINER_DIR="/workspace-sample-data/sendy-knowledge"
 
 say() {
   printf '%s\n' "$*"
@@ -15,6 +17,130 @@ say() {
 die() {
   say "error: $*" >&2
   exit 1
+}
+
+env_get() {
+  file="$1"
+  key="$2"
+  awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$file"
+}
+
+env_set_if_missing_or_default() {
+  file="$1"
+  key="$2"
+  value="$3"
+  default_value="${4:-}"
+  tmp_file="$file.tmp.$$"
+
+  awk -F= -v key="$key" -v value="$value" -v default_value="$default_value" '
+    $1 == key {
+      found = 1
+      current = substr($0, index($0, "=") + 1)
+      if (current == "" || current == "replace-me" || (default_value != "" && current == default_value)) {
+        print key "=" value
+      } else {
+        print $0
+      }
+      next
+    }
+    { print }
+    END {
+      if (!found) {
+        print key "=" value
+      }
+    }
+  ' "$file" > "$tmp_file"
+  mv "$tmp_file" "$file"
+}
+
+ollama_models() {
+  command -v ollama >/dev/null 2>&1 || return 1
+  ollama list 2>/dev/null | awk 'NR > 1 { print $1 }'
+}
+
+pick_ollama_embedding_model() {
+  models=$(ollama_models || true)
+  [ -n "${models:-}" ] || return 1
+
+  for candidate in qwen3-embedding:0.6b qwen3-embedding nomic-embed-text mxbai-embed-large; do
+    if printf '%s\n' "$models" | grep -Fx "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "$models" | awk '/embed|embedding/ { print; exit }'
+}
+
+pick_ollama_generation_model() {
+  models=$(ollama_models || true)
+  [ -n "${models:-}" ] || return 1
+
+  for candidate in qwen3:0.6b qwen3 llama3.2 qwen2.5:3b qwen2.5 mistral; do
+    if printf '%s\n' "$models" | grep -Fx "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  printf '%s\n' "$models" | awk '!/embed|embedding/ { print; exit }'
+}
+
+known_ollama_embedding_dimensions() {
+  model="$1"
+  case "$model" in
+    qwen3-embedding:0.6b|qwen3-embedding|mxbai-embed-large)
+      printf '1024\n'
+      ;;
+    nomic-embed-text)
+      printf '768\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+apply_ollama_profile_if_possible() {
+  embedding_model=$(pick_ollama_embedding_model || true)
+  generation_model=$(pick_ollama_generation_model || true)
+
+  if [ -z "${embedding_model:-}" ]; then
+    return
+  fi
+
+  embedding_dimensions=$(known_ollama_embedding_dimensions "$embedding_model" || true)
+  ollama_base_url="http://host.docker.internal:11434/v1"
+
+  for file in "$ENV_FILE" "$BACKEND_ENV_FILE"; do
+    env_set_if_missing_or_default "$file" "EMBEDDING_API_KEY" "ollama"
+    env_set_if_missing_or_default "$file" "EMBEDDING_BASE_URL" "$ollama_base_url"
+    env_set_if_missing_or_default "$file" "EMBEDDING_MODEL" "$embedding_model" "text-embedding-3-small"
+    if [ -n "${embedding_dimensions:-}" ]; then
+      env_set_if_missing_or_default "$file" "EMBEDDING_DIMENSIONS" "$embedding_dimensions" "1536"
+    fi
+    if [ -n "${generation_model:-}" ]; then
+      env_set_if_missing_or_default "$file" "GENERATION_MODEL" "$generation_model"
+      env_set_if_missing_or_default "$file" "GENERATION_BASE_URL" "$ollama_base_url"
+      env_set_if_missing_or_default "$file" "GENERATION_API_KEY" "ollama"
+    fi
+  done
+
+  say "applied local Ollama defaults for missing embedding/generation env values"
+}
+
+embedding_profile_ready() {
+  file="$1"
+  model=$(env_get "$file" "EMBEDDING_MODEL")
+  api_key=$(env_get "$file" "EMBEDDING_API_KEY")
+  [ -n "${model:-}" ] && [ -n "${api_key:-}" ] && [ "$api_key" != "replace-me" ]
+}
+
+generation_profile_ready() {
+  file="$1"
+  model=$(env_get "$file" "GENERATION_MODEL")
+  api_key=$(env_get "$file" "GENERATION_API_KEY")
+  [ -n "${model:-}" ] && [ -n "${api_key:-}" ] && [ "$api_key" != "replace-me" ]
 }
 
 command -v docker >/dev/null 2>&1 || die "docker is required"
@@ -123,6 +249,7 @@ fi
 
 ensure_env_file "$ENV_EXAMPLE" "$ENV_FILE" "$POSTGRES_PORT"
 ensure_env_file "$BACKEND_ENV_EXAMPLE" "$BACKEND_ENV_FILE" "$POSTGRES_PORT"
+apply_ollama_profile_if_possible
 
 say "starting internal_kb_fullstack with POSTGRES_PORT=$POSTGRES_PORT"
 (
@@ -133,6 +260,28 @@ say "starting internal_kb_fullstack with POSTGRES_PORT=$POSTGRES_PORT"
 wait_for_http "api health" "http://localhost:8000/healthz"
 wait_for_http "api readiness" "http://localhost:8000/readyz"
 wait_for_http "web" "http://localhost:3000"
+
+if [ -d "$SAMPLE_DATA_HOST_DIR" ]; then
+  if embedding_profile_ready "$ENV_FILE"; then
+    say "bootstrapping sample corpus from $SAMPLE_DATA_HOST_DIR"
+    (
+      cd "$PROJECT_DIR"
+      docker compose exec -T api python scripts/import_sample_corpus.py \
+        --root "$SAMPLE_DATA_CONTAINER_DIR" \
+        --skip-if-detected \
+        --refresh-glossary
+    )
+    say "sample-data bootstrap completed; large first-time imports may continue embedding in the background"
+  else
+    say "sample corpus detected, but embedding profile is not configured; skipping sample-data bootstrap"
+  fi
+else
+  say "sample corpus not found; skipping sample-data bootstrap"
+fi
+
+if ! generation_profile_ready "$ENV_FILE"; then
+  say "warning: generation profile is not configured; glossary draft generation will not be available yet"
+fi
 
 say ""
 say "internal_kb_fullstack is up."

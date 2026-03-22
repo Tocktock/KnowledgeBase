@@ -10,3 +10,4 @@ internal_kb_fullstack/backend/*.egg-info/
 internal_kb_fullstack/frontend/node_modules/
 internal_kb_fullstack/frontend/.next/
 internal_kb_fullstack/frontend/tsconfig.tsbuildinfo
+sample-data/
