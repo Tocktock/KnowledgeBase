@@ -28,10 +28,12 @@ export function JobsPage({ jobs }: { jobs: JobSummary[] }) {
               <div className="mb-3 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2 text-base font-semibold text-neutral-950 dark:text-neutral-50">
                   <Icon className={`size-4 ${job.status === 'processing' ? 'animate-spin' : ''}`} />
-                  {job.status}
+                  {job.title}
                 </div>
-                <Badge>{job.embedding_model}</Badge>
-                <Badge>{job.embedding_dimensions} dims</Badge>
+                <Badge>{job.kind}</Badge>
+                <Badge>{job.status}</Badge>
+                {job.embedding_model ? <Badge>{job.embedding_model}</Badge> : null}
+                {typeof job.embedding_dimensions === 'number' ? <Badge>{job.embedding_dimensions} dims</Badge> : null}
                 <Badge>priority {job.priority}</Badge>
                 <Badge>attempt {job.attempt_count}</Badge>
               </div>

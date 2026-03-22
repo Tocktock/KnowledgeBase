@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.utils import utcnow
-from app.db.models import DocumentChunk, EmbeddingCache, EmbeddingJob
+from app.db.models import DocumentChunk, EmbeddingCache, EmbeddingJob, GlossaryJob, GlossaryJobKind
 from app.services.embeddings import get_embedding_service
+from app.services.glossary import create_or_regenerate_glossary_draft, refresh_glossary_concepts
 
 
 async def acquire_next_job(session: AsyncSession) -> EmbeddingJob | None:
@@ -45,6 +46,38 @@ async def acquire_next_job(session: AsyncSession) -> EmbeddingJob | None:
     if job_id is None:
         return None
     return await session.get(EmbeddingJob, job_id)
+
+
+async def acquire_next_glossary_job(session: AsyncSession) -> GlossaryJob | None:
+    settings = get_settings()
+    statement = text(
+        """
+        WITH candidate AS (
+            SELECT id
+            FROM glossary_jobs
+            WHERE status IN ('queued', 'failed')
+              AND attempt_count < :max_attempts
+            ORDER BY priority ASC, requested_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE glossary_jobs j
+        SET status = 'processing',
+            started_at = now(),
+            finished_at = NULL,
+            last_heartbeat_at = now(),
+            attempt_count = j.attempt_count + 1,
+            error_message = NULL
+        FROM candidate
+        WHERE j.id = candidate.id
+        RETURNING j.id
+        """
+    )
+    result = await session.execute(statement, {"max_attempts": settings.worker_max_attempts})
+    job_id = result.scalar_one_or_none()
+    if job_id is None:
+        return None
+    return await session.get(GlossaryJob, job_id)
 
 
 async def mark_job_failed(session: AsyncSession, job_id: UUID, message: str) -> None:
@@ -82,6 +115,45 @@ async def mark_job_completed(session: AsyncSession, job_id: UUID) -> None:
 async def heartbeat(session: AsyncSession, job_id: UUID) -> None:
     await session.execute(
         text("UPDATE embedding_jobs SET last_heartbeat_at = now() WHERE id = :job_id"),
+        {"job_id": job_id},
+    )
+
+
+async def mark_glossary_job_failed(session: AsyncSession, job_id: UUID, message: str) -> None:
+    await session.execute(
+        text(
+            """
+            UPDATE glossary_jobs
+            SET status = 'failed',
+                error_message = :message,
+                finished_at = now(),
+                last_heartbeat_at = now()
+            WHERE id = :job_id
+            """
+        ),
+        {"job_id": job_id, "message": message[:4000]},
+    )
+
+
+async def mark_glossary_job_completed(session: AsyncSession, job_id: UUID) -> None:
+    await session.execute(
+        text(
+            """
+            UPDATE glossary_jobs
+            SET status = 'completed',
+                error_message = NULL,
+                finished_at = now(),
+                last_heartbeat_at = now()
+            WHERE id = :job_id
+            """
+        ),
+        {"job_id": job_id},
+    )
+
+
+async def heartbeat_glossary_job(session: AsyncSession, job_id: UUID) -> None:
+    await session.execute(
+        text("UPDATE glossary_jobs SET last_heartbeat_at = now() WHERE id = :job_id"),
         {"job_id": job_id},
     )
 
@@ -224,6 +296,46 @@ async def process_job(session_factory: async_sessionmaker[AsyncSession], job_id:
         await session.commit()
 
 
+async def process_glossary_job(session_factory: async_sessionmaker[AsyncSession], job_id: UUID) -> None:
+    async with session_factory() as session:
+        job = await session.get(GlossaryJob, job_id)
+        if job is None:
+            return
+
+        await heartbeat_glossary_job(session, job.id)
+        if job.kind == GlossaryJobKind.refresh.value:
+            updated_count = await refresh_glossary_concepts(session)
+            job.payload = {**(job.payload or {}), "updated_concepts": updated_count}
+            await mark_glossary_job_completed(session, job.id)
+            await session.commit()
+            return
+
+        if job.kind == GlossaryJobKind.draft.value:
+            if job.target_concept_id is None:
+                raise RuntimeError("Glossary draft job is missing target_concept_id.")
+            detail = await create_or_regenerate_glossary_draft(
+                session,
+                job.target_concept_id,
+                payload=dict_to_glossary_draft_payload(job.payload),
+            )
+            job.target_document_id = detail.concept.generated_document.id if detail.concept.generated_document is not None else None
+            await mark_glossary_job_completed(session, job.id)
+            await session.commit()
+            return
+
+        raise RuntimeError(f"Unsupported glossary job kind: {job.kind}")
+
+
+def dict_to_glossary_draft_payload(payload: dict[str, Any] | None):
+    from app.schemas.glossary import GlossaryDraftRequest
+
+    payload = payload or {}
+    return GlossaryDraftRequest(
+        domain=payload.get("domain"),
+        regenerate=bool(payload.get("regenerate", True)),
+    )
+
+
 async def run_worker_loop(session_factory: async_sessionmaker[AsyncSession]) -> None:
     settings = get_settings()
     configure_logging()
@@ -234,7 +346,19 @@ async def run_worker_loop(session_factory: async_sessionmaker[AsyncSession]) -> 
             await session.commit()
 
         if job is None:
-            await asyncio.sleep(settings.worker_idle_sleep_seconds)
+            async with session_factory() as session:
+                glossary_job = await acquire_next_glossary_job(session)
+                await session.commit()
+            if glossary_job is None:
+                await asyncio.sleep(settings.worker_idle_sleep_seconds)
+                continue
+            try:
+                await process_glossary_job(session_factory, glossary_job.id)
+            except Exception as exc:  # noqa: BLE001
+                async with session_factory() as session:
+                    await mark_glossary_job_failed(session, glossary_job.id, str(exc))
+                    await session.commit()
+                await asyncio.sleep(settings.worker_poll_seconds)
             continue
 
         try:

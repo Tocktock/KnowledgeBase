@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -25,7 +25,32 @@ class IngestResult:
     unchanged: bool
 
 
-async def _find_document(session: AsyncSession, payload: IngestDocumentRequest, resolved_slug: str) -> Document | None:
+@dataclass(slots=True)
+class DocumentMatch:
+    document: Document | None
+    matched_by: Literal["none", "source_external_id", "slug"]
+
+
+class SlugConflictError(RuntimeError):
+    def __init__(self, document: Document) -> None:
+        super().__init__("A document with this slug already exists.")
+        self.document = document
+
+
+async def _get_document_by_slug(
+    session: AsyncSession,
+    slug: str,
+    *,
+    exclude_id: UUID | None = None,
+) -> Document | None:
+    query = select(Document).where(Document.slug == slug)
+    if exclude_id is not None:
+        query = query.where(Document.id != exclude_id)
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def _find_document(session: AsyncSession, payload: IngestDocumentRequest, resolved_slug: str) -> DocumentMatch:
     if payload.source_external_id:
         result = await session.execute(
             select(Document).where(
@@ -35,10 +60,12 @@ async def _find_document(session: AsyncSession, payload: IngestDocumentRequest, 
         )
         document = result.scalar_one_or_none()
         if document is not None:
-            return document
+            return DocumentMatch(document=document, matched_by="source_external_id")
 
-    result = await session.execute(select(Document).where(Document.slug == resolved_slug))
-    return result.scalar_one_or_none()
+    document = await _get_document_by_slug(session, resolved_slug)
+    if document is not None:
+        return DocumentMatch(document=document, matched_by="slug")
+    return DocumentMatch(document=None, matched_by="none")
 
 
 async def _next_revision_number(session: AsyncSession, document_id: UUID) -> int:
@@ -54,7 +81,9 @@ async def _upsert_document(
     payload: IngestDocumentRequest,
     resolved_slug: str,
 ) -> Document:
-    document = await _find_document(session, payload, resolved_slug)
+    match = await _find_document(session, payload, resolved_slug)
+    document = match.document
+
     if document is None:
         document = Document(
             source_system=payload.source_system,
@@ -73,6 +102,14 @@ async def _upsert_document(
         session.add(document)
         await session.flush()
         return document
+
+    if match.matched_by == "slug" and not payload.allow_slug_update:
+        raise SlugConflictError(document)
+
+    if match.matched_by == "source_external_id" and document.slug != resolved_slug:
+        slug_owner = await _get_document_by_slug(session, resolved_slug, exclude_id=document.id)
+        if slug_owner is not None:
+            raise SlugConflictError(slug_owner)
 
     document.source_url = payload.source_url
     document.slug = resolved_slug
@@ -157,6 +194,21 @@ def _build_chunk_rows(
     return rows
 
 
+async def _maybe_enqueue_incremental_glossary_refresh(session: AsyncSession, document: Document) -> None:
+    if document.status != "published":
+        return
+    if document.source_system == "glossary":
+        return
+    from app.services.glossary import enqueue_glossary_refresh_job
+
+    await enqueue_glossary_refresh_job(
+        session,
+        scope="incremental",
+        target_document_id=document.id,
+        priority=160,
+    )
+
+
 async def ingest_document(session: AsyncSession, payload: IngestDocumentRequest) -> IngestResult:
     parser = DocumentParser()
     parsed = parser.parse(content_type=payload.content_type, content=payload.content)
@@ -169,6 +221,7 @@ async def ingest_document(session: AsyncSession, payload: IngestDocumentRequest)
     current_revision = await _get_current_revision(session, document)
 
     if current_revision is not None and current_revision.checksum == checksum:
+        await _maybe_enqueue_incremental_glossary_refresh(session, document)
         await session.commit()
         await session.refresh(document)
         return IngestResult(document=document, revision=current_revision, job=None, unchanged=True)
@@ -208,6 +261,7 @@ async def ingest_document(session: AsyncSession, payload: IngestDocumentRequest)
         revision_id=revision.id,
         priority=payload.priority,
     )
+    await _maybe_enqueue_incremental_glossary_refresh(session, document)
 
     await session.commit()
     await session.refresh(document)

@@ -24,6 +24,7 @@ class IngestDocumentRequest(BaseModel):
     status: Literal["draft", "published", "archived"] = "published"
     metadata: dict[str, Any] = Field(default_factory=dict)
     priority: int = 100
+    allow_slug_update: bool = True
 
 
 class GenerateDefinitionDraftRequest(BaseModel):

@@ -44,6 +44,33 @@ class JobStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class ConceptStatus(str, enum.Enum):
+    suggested = "suggested"
+    drafted = "drafted"
+    approved = "approved"
+    ignored = "ignored"
+    stale = "stale"
+
+
+class ConceptType(str, enum.Enum):
+    term = "term"
+    product = "product"
+    process = "process"
+    team = "team"
+    metric = "metric"
+    entity = "entity"
+
+
+class GlossaryJobKind(str, enum.Enum):
+    refresh = "refresh"
+    draft = "draft"
+
+
+class GlossaryJobScope(str, enum.Enum):
+    full = "full"
+    incremental = "incremental"
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
@@ -217,3 +244,62 @@ class SchemaMigration(Base):
 
     version: Mapped[str] = mapped_column(Text(), primary_key=True)
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class KnowledgeConcept(Base):
+    __tablename__ = "knowledge_concepts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    normalized_term: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    display_term: Mapped[str] = mapped_column(Text(), nullable=False)
+    aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    language_code: Mapped[str] = mapped_column(String(12), nullable=False, server_default="ko")
+    concept_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConceptType.term.value)
+    confidence_score: Mapped[float] = mapped_column(nullable=False, server_default="0")
+    support_doc_count: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="0")
+    support_chunk_count: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConceptStatus.suggested.value)
+    owner_team_hint: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    source_system_mix: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    generated_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    canonical_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConceptSupport(Base):
+    __tablename__ = "concept_supports"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    concept_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("knowledge_concepts.id", ondelete="CASCADE"), nullable=False)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
+    revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("document_revisions.id", ondelete="SET NULL"), nullable=True)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True)
+    support_group_key: Mapped[str] = mapped_column(Text(), nullable=False)
+    evidence_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    evidence_term: Mapped[str] = mapped_column(Text(), nullable=False)
+    support_text: Mapped[str] = mapped_column(Text(), nullable=False)
+    evidence_strength: Mapped[float] = mapped_column(nullable=False, server_default="0")
+    meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class GlossaryJob(Base):
+    __tablename__ = "glossary_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, server_default=GlossaryJobScope.full.value)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=JobStatus.queued.value)
+    target_concept_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("knowledge_concepts.id", ondelete="SET NULL"), nullable=True)
+    target_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    priority: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="200")
+    attempt_count: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="0")
+    error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

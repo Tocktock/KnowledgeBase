@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     generation_api_key: str = ""
     generation_base_url: str | None = None
     generation_model: str = ""
-    generation_temperature: float = 0.2
+    generation_temperature: float = 0.0
     generation_timeout_seconds: int = 90
     generation_reference_limit: int = 8
     generation_search_limit: int = 12

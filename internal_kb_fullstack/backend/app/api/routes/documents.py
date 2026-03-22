@@ -32,7 +32,7 @@ from app.services.document_drafts import (
     DefinitionDraftNotFoundError,
     generate_definition_draft,
 )
-from app.services.ingest import ingest_document
+from app.services.ingest import SlugConflictError, ingest_document
 from app.services.jobs import request_document_reindex
 from app.services.parser import DocumentParser
 from app.services.wiki_graph import extract_heading_items, extract_internal_slugs, get_document_relations
@@ -84,6 +84,20 @@ def _relation_item(row: dict) -> DocumentRelationItem:
     )
 
 
+def _slug_conflict_detail(document: Document) -> dict[str, object]:
+    return {
+        "code": "slug_conflict",
+        "message": "A document with this slug already exists.",
+        "document": {
+            "id": str(document.id),
+            "slug": document.slug,
+            "title": document.title,
+            "status": document.status,
+            "owner_team": document.owner_team,
+        },
+    }
+
+
 @router.get("", response_model=DocumentListResponse)
 async def list_documents_route(
     q: str | None = Query(default=None, alias="query"),
@@ -112,7 +126,10 @@ async def ingest_document_route(
     payload: IngestDocumentRequest,
     session: AsyncSession = Depends(get_db_session),
 ) -> IngestDocumentResponse:
-    result = await ingest_document(session, payload)
+    try:
+        result = await ingest_document(session, payload)
+    except SlugConflictError as exc:
+        raise HTTPException(status_code=409, detail=_slug_conflict_detail(exc.document)) from exc
     return IngestDocumentResponse(
         document=_document_summary(result.document),
         revision=_revision_summary(result.revision),

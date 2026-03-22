@@ -39,10 +39,21 @@ import type {
   GenerateDefinitionDraftResponse,
   IngestDocumentRequest,
   IngestDocumentResponse,
+  SlugConflictDetail,
 } from '@/lib/types'
 import { slugify } from '@/lib/utils'
 
 type EditorMode = 'visual' | 'source' | 'preview'
+
+class SlugConflictError extends Error {
+  detail: SlugConflictDetail
+
+  constructor(detail: SlugConflictDetail) {
+    super(detail.message)
+    this.name = 'SlugConflictError'
+    this.detail = detail
+  }
+}
 
 async function ingestDocument(payload: IngestDocumentRequest) {
   const response = await fetch('/api/documents', {
@@ -50,9 +61,16 @@ async function ingestDocument(payload: IngestDocumentRequest) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  const data = (await response.json()) as IngestDocumentResponse | { detail?: string }
+  const data = (await response.json()) as IngestDocumentResponse | { detail?: string | SlugConflictDetail }
   if (!response.ok) {
-    throw new Error('detail' in data ? data.detail ?? '문서 생성에 실패했습니다.' : '문서 생성에 실패했습니다.')
+    if ('detail' in data && typeof data.detail === 'object' && data.detail?.code === 'slug_conflict') {
+      throw new SlugConflictError(data.detail)
+    }
+    throw new Error(
+      'detail' in data && typeof data.detail === 'string'
+        ? data.detail || '문서 생성에 실패했습니다.'
+        : '문서 생성에 실패했습니다.',
+    )
   }
   return data as IngestDocumentResponse
 }
@@ -119,13 +137,21 @@ export function DocumentEditor() {
   const [markdown, setMarkdown] = useState('# 새 문서\n\n여기에 내용을 작성하세요.')
   const [definitionTopic, setDefinitionTopic] = useState('')
   const [definitionDomain, setDefinitionDomain] = useState('')
+  const [generationSourceSystem, setGenerationSourceSystem] = useState('')
+  const [generationOwnerTeam, setGenerationOwnerTeam] = useState('')
+  const [generationDocType, setGenerationDocType] = useState('')
   const [generatedReferences, setGeneratedReferences] = useState<DefinitionDraftReference[]>([])
+  const [pendingSlugConflict, setPendingSlugConflict] = useState<SlugConflictDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (!slug && title) setSlug(slugify(title))
   }, [slug, title])
+
+  useEffect(() => {
+    setPendingSlugConflict(null)
+  }, [slug])
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -161,10 +187,18 @@ export function DocumentEditor() {
   const createMutation = useMutation({
     mutationFn: ingestDocument,
     onSuccess(data) {
+      setError(null)
+      setPendingSlugConflict(null)
       queryClient.invalidateQueries({ queryKey: ['documents'] })
       router.push(`/docs/${data.document.slug}`)
     },
     onError(err) {
+      if (err instanceof SlugConflictError) {
+        setPendingSlugConflict(err.detail)
+        setError(null)
+        return
+      }
+      setPendingSlugConflict(null)
       setError(err instanceof Error ? err.message : '문서 생성에 실패했습니다.')
     },
   })
@@ -211,6 +245,24 @@ export function DocumentEditor() {
     editor.commands.setContent(markdown, { contentType: 'markdown' })
   }
 
+  const buildIngestPayload = (allowSlugUpdate: boolean): IngestDocumentRequest => ({
+    source_system: 'manual',
+    title,
+    slug,
+    source_url: sourceUrl || undefined,
+    content_type: 'markdown',
+    content: markdown,
+    doc_type: docType,
+    language_code: 'ko',
+    owner_team: ownerTeam || undefined,
+    status,
+    priority: 100,
+    allow_slug_update: allowSlugUpdate,
+    metadata: {
+      ui: 'nextjs-notion-wiki-fusion',
+    },
+  })
+
   const insertInternalLink = () => {
     const rawSlug = window.prompt('링크할 문서 slug를 입력하세요', slug || 'example-doc')
     if (!rawSlug) return
@@ -226,22 +278,8 @@ export function DocumentEditor() {
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
     setError(null)
-    createMutation.mutate({
-      source_system: 'manual',
-      title,
-      slug,
-      source_url: sourceUrl || undefined,
-      content_type: 'markdown',
-      content: markdown,
-      doc_type: docType,
-      language_code: 'ko',
-      owner_team: ownerTeam || undefined,
-      status,
-      priority: 100,
-      metadata: {
-        ui: 'nextjs-notion-wiki-fusion',
-      },
-    })
+    setPendingSlugConflict(null)
+    createMutation.mutate(buildIngestPayload(false))
   }
 
   const handleFileUpload = async (event: FormEvent<HTMLFormElement>) => {
@@ -258,12 +296,26 @@ export function DocumentEditor() {
 
   const handleGenerateDefinition = () => {
     setError(null)
-    generateMutation.mutate({
+    setGeneratedReferences([])
+
+    const payload: GenerateDefinitionDraftRequest = {
       topic: definitionTopic.trim(),
       domain: definitionDomain.trim() || undefined,
-      doc_type: docType || undefined,
-      owner_team: ownerTeam || undefined,
-    })
+      doc_type: generationDocType.trim() || undefined,
+      owner_team: generationOwnerTeam.trim() || undefined,
+      source_system: generationSourceSystem.trim() || undefined,
+    }
+
+    generateMutation.mutate(payload)
+  }
+
+  const handleConfirmSlugUpdate = () => {
+    setError(null)
+    createMutation.mutate(buildIngestPayload(true))
+  }
+
+  const handleCancelSlugUpdate = () => {
+    setPendingSlugConflict(null)
   }
 
   return (
@@ -383,6 +435,30 @@ export function DocumentEditor() {
 
           {error ? <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300">{error}</div> : null}
 
+          {pendingSlugConflict ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+              <div className="font-medium">같은 slug 문서가 이미 있습니다.</div>
+              <div className="mt-2 leading-6">
+                이 문서를 저장하면 기존 문서에 새 리비전을 추가합니다.
+                <div className="mt-2 rounded-xl bg-white/70 px-3 py-3 text-xs leading-6 text-amber-900 dark:bg-neutral-950/40 dark:text-amber-100">
+                  <div>제목: {pendingSlugConflict.document.title}</div>
+                  <div>slug: {pendingSlugConflict.document.slug}</div>
+                  <div>상태: {pendingSlugConflict.document.status}</div>
+                  <div>소유 팀: {pendingSlugConflict.document.owner_team || '미지정'}</div>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button type="button" onClick={handleConfirmSlugUpdate} disabled={createMutation.isPending}>
+                  {createMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                  Update existing document
+                </Button>
+                <Button type="button" variant="outline" onClick={handleCancelSlugUpdate} disabled={createMutation.isPending}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="flex justify-end gap-3">
             <Button type="button" variant="outline" onClick={() => router.push('/docs')}>
               취소
@@ -408,8 +484,28 @@ export function DocumentEditor() {
                 <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">도메인 / 맥락</label>
                 <Input value={definitionDomain} onChange={(event) => setDefinitionDomain(event.target.value)} placeholder="예: delivery operations" />
               </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: source system</label>
+                <Input
+                  value={generationSourceSystem}
+                  onChange={(event) => setGenerationSourceSystem(event.target.value)}
+                  placeholder="선택 입력 예: notion-export"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 소유 팀</label>
+                <Input
+                  value={generationOwnerTeam}
+                  onChange={(event) => setGenerationOwnerTeam(event.target.value)}
+                  placeholder="선택 입력 예: logistics"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 타입</label>
+                <Input value={generationDocType} onChange={(event) => setGenerationDocType(event.target.value)} placeholder="선택 입력 예: glossary" />
+              </div>
               <div className="rounded-2xl bg-neutral-50 px-4 py-3 text-xs leading-6 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
-                현재 입력한 문서 타입과 소유 팀 값을 검색 필터로 함께 사용합니다. 생성된 내용은 자동 저장되지 않고, 편집기 안에 초안으로만 채워집니다.
+                생성 필터는 선택 사항이며 저장 메타데이터와 분리되어 있습니다. 비워두면 전체 문서를 대상으로 검색하고, 생성된 내용은 자동 저장되지 않고 편집기 안에 초안으로만 채워집니다.
               </div>
               <Button type="button" className="w-full" onClick={handleGenerateDefinition} disabled={!definitionTopic.trim() || generateMutation.isPending}>
                 {generateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}

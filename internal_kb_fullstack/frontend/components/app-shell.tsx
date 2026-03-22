@@ -1,7 +1,7 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { BookOpenText, Clock3, Home, Menu, PlusSquare, Search, Workflow } from 'lucide-react'
+import { BookMarked, BookOpenText, Clock3, Home, Menu, PlusSquare, Search, Sparkles, Workflow } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
@@ -17,6 +17,8 @@ const navItems = [
   { href: '/', label: '홈', icon: Home },
   { href: '/search', label: '시맨틱 검색', icon: Search },
   { href: '/docs', label: '문서 탐색', icon: BookOpenText },
+  { href: '/glossary', label: '글로서리', icon: BookMarked },
+  { href: '/glossary/review', label: '리뷰 스튜디오', icon: Sparkles },
   { href: '/new', label: '새 문서', icon: PlusSquare },
   { href: '/jobs', label: '인덱싱 작업', icon: Workflow },
 ]

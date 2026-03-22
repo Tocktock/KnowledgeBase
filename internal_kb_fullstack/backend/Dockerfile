@@ -8,6 +8,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY evals ./evals
 COPY scripts ./scripts
 COPY tests ./tests
 COPY docs ./docs

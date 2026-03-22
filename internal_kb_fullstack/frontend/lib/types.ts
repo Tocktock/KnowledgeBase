@@ -100,12 +100,28 @@ export type SearchHit = {
   hybrid_score: number
   vector_score?: number | null
   keyword_score?: number | null
+  result_type?: string
+  matched_concept_id?: string | null
+  matched_concept_term?: string | null
+  evidence_kind?: string | null
+  evidence_strength?: number | null
+  support_group_key?: string | null
   metadata: Record<string, unknown>
 }
 
 export type SearchResponse = {
   query: string
+  resolved_concept_id?: string | null
+  resolved_concept_term?: string | null
+  weak_grounding?: boolean
+  notes?: string[]
   hits: SearchHit[]
+}
+
+export type SearchExplainResponse = SearchResponse & {
+  normalized_query: string
+  resolved_concept_status?: string | null
+  canonical_document_slug?: string | null
 }
 
 export type SearchRequest = {
@@ -119,17 +135,98 @@ export type SearchRequest = {
 
 export type JobSummary = {
   id: string
-  revision_id: string
+  kind: string
+  title: string
+  revision_id?: string | null
+  target_concept_id?: string | null
+  target_document_id?: string | null
   status: string
-  embedding_model: string
-  embedding_dimensions: number
-  batch_size: number
+  embedding_model?: string | null
+  embedding_dimensions?: number | null
+  batch_size?: number | null
   priority: number
   attempt_count: number
   error_message?: string | null
   requested_at: string
   started_at?: string | null
   finished_at?: string | null
+}
+
+export type GlossaryConceptDocumentLink = {
+  id: string
+  slug: string
+  title: string
+  status: string
+  doc_type: string
+  owner_team?: string | null
+}
+
+export type GlossaryConceptSummary = {
+  id: string
+  slug: string
+  normalized_term: string
+  display_term: string
+  aliases: string[]
+  language_code: string
+  concept_type: string
+  confidence_score: number
+  support_doc_count: number
+  support_chunk_count: number
+  status: string
+  owner_team_hint?: string | null
+  source_system_mix: string[]
+  generated_document?: GlossaryConceptDocumentLink | null
+  canonical_document?: GlossaryConceptDocumentLink | null
+  metadata: Record<string, unknown>
+  refreshed_at: string
+  updated_at: string
+}
+
+export type GlossarySupportItem = {
+  id: string
+  document_id: string
+  document_slug: string
+  document_title: string
+  document_status: string
+  document_doc_type: string
+  owner_team?: string | null
+  revision_id?: string | null
+  chunk_id?: string | null
+  evidence_kind: string
+  evidence_term: string
+  evidence_strength: number
+  support_group_key: string
+  support_text: string
+  metadata: Record<string, unknown>
+}
+
+export type GlossaryConceptDetailResponse = {
+  concept: GlossaryConceptSummary
+  supports: GlossarySupportItem[]
+  related_concepts: GlossaryConceptSummary[]
+}
+
+export type GlossaryConceptListResponse = {
+  items: GlossaryConceptSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type GlossaryRefreshRequest = {
+  scope?: 'full' | 'incremental'
+}
+
+export type GlossaryDraftRequest = {
+  domain?: string
+  regenerate?: boolean
+}
+
+export type GlossaryConceptUpdateRequest = {
+  action: 'approve' | 'ignore' | 'mark_stale' | 'suggest' | 'merge' | 'split'
+  canonical_document_id?: string | null
+  merge_into_concept_id?: string | null
+  split_aliases?: string[]
 }
 
 export type IngestDocumentRequest = {
@@ -147,6 +244,7 @@ export type IngestDocumentRequest = {
   status?: 'draft' | 'published' | 'archived'
   metadata?: Record<string, unknown>
   priority?: number
+  allow_slug_update?: boolean
 }
 
 export type IngestDocumentResponse = {
@@ -166,6 +264,20 @@ export type DefinitionDraftReference = {
   section_title?: string | null
   heading_path: string[]
   excerpt: string
+}
+
+export type SlugConflictDocument = {
+  id: string
+  slug: string
+  title: string
+  status: string
+  owner_team?: string | null
+}
+
+export type SlugConflictDetail = {
+  code: 'slug_conflict'
+  message: string
+  document: SlugConflictDocument
 }
 
 export type GenerateDefinitionDraftRequest = {

@@ -1,0 +1,52 @@
+{
+  "search_cases": [
+    {
+      "name": "sendy_vehicle",
+      "query": "센디 차량",
+      "expected_concept_slug": "센디-차량",
+      "allowed_first_hit_slug_prefixes": ["glossary-센디-차량", "센디-차량"],
+      "require_grounded": true,
+      "expect_glossary_first_if_approved": true,
+      "min_unique_families_in_top_hits": 2
+    },
+    {
+      "name": "dispatch_drop_root_cause",
+      "query": "내부배차율 하락 원인 파악",
+      "expected_concept_slug": "내부배차율-하락-원인-파악",
+      "allowed_first_hit_slug_prefixes": ["내부배차율-하락-원인-파악"],
+      "require_grounded": true,
+      "expect_glossary_first_if_approved": true,
+      "min_unique_families_in_top_hits": 1
+    },
+    {
+      "name": "db_dip",
+      "query": "디비딥",
+      "expected_concept_slug": "디비딥",
+      "allowed_first_hit_slug_prefixes": ["glossary-디비딥", "디비딥"],
+      "require_grounded": true,
+      "expect_glossary_first_if_approved": true,
+      "min_unique_families_in_top_hits": 1
+    }
+  ],
+  "generation_cases": [
+    {
+      "name": "sendy_vehicle_definition",
+      "topic": "센디 차량",
+      "domain": "차량 분류",
+      "expected_reference_slug_prefixes": ["센디-차량"],
+      "min_references": 2
+    },
+    {
+      "name": "dispatch_drop_definition_refuses_weak_grounding",
+      "topic": "내부배차율 하락 원인 파악",
+      "expect_not_found": true
+    },
+    {
+      "name": "sendy_vehicle_platform_filter_rejects_weak_grounding",
+      "topic": "센디 차량",
+      "domain": "차량 분류",
+      "owner_team": "platform",
+      "expect_not_found": true
+    }
+  ]
+}

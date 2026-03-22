@@ -29,9 +29,25 @@ class SearchHit(BaseModel):
     hybrid_score: float
     vector_score: float | None = None
     keyword_score: float | None = None
+    result_type: str = "document"
+    matched_concept_id: UUID | None = None
+    matched_concept_term: str | None = None
+    evidence_kind: str | None = None
+    evidence_strength: float | None = None
+    support_group_key: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SearchResponse(BaseModel):
     query: str = Field(..., min_length=1)
+    resolved_concept_id: UUID | None = None
+    resolved_concept_term: str | None = None
+    weak_grounding: bool = False
+    notes: list[str] = Field(default_factory=list)
     hits: list[SearchHit]
+
+
+class SearchExplainResponse(SearchResponse):
+    normalized_query: str
+    resolved_concept_status: str | None = None
+    canonical_document_slug: str | None = None

@@ -2,8 +2,11 @@ import {
   DocumentListResponse,
   DocumentRelationsResponse,
   DocumentViewResponse,
+  GlossaryConceptDetailResponse,
+  GlossaryConceptListResponse,
   JobSummary,
   SearchRequest,
+  SearchExplainResponse,
   SearchResponse,
 } from '@/lib/types'
 
@@ -48,4 +51,34 @@ export async function semanticSearch(payload: SearchRequest) {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export async function explainSearch(payload: SearchRequest) {
+  return backendFetch<SearchExplainResponse>('/v1/search/explain', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getGlossaryConcepts(params?: {
+  query?: string
+  status?: string
+  concept_type?: string
+  owner_team?: string
+  limit?: number
+  offset?: number
+}) {
+  const searchParams = new URLSearchParams()
+  if (params?.query) searchParams.set('query', params.query)
+  if (params?.status) searchParams.set('status', params.status)
+  if (params?.concept_type) searchParams.set('concept_type', params.concept_type)
+  if (params?.owner_team) searchParams.set('owner_team', params.owner_team)
+  if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit))
+  if (typeof params?.offset === 'number') searchParams.set('offset', String(params.offset))
+  const suffix = searchParams.toString() ? `?${searchParams}` : ''
+  return backendFetch<GlossaryConceptListResponse>(`/v1/glossary${suffix}`)
+}
+
+export async function getGlossaryConceptBySlug(slug: string) {
+  return backendFetch<GlossaryConceptDetailResponse>(`/v1/glossary/slug/${encodeURIComponent(slug)}`)
 }

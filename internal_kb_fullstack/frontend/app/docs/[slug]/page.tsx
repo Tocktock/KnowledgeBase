@@ -26,7 +26,9 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
       <div className="space-y-6">
         <Card className="overflow-hidden p-7 md:p-8">
           <div className="mb-4 flex flex-wrap gap-2">
-            <Badge>{data.document.doc_type}</Badge>
+            <Badge className={data.document.doc_type === 'glossary' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300' : ''}>
+              {data.document.doc_type}
+            </Badge>
             <Badge>{data.document.status}</Badge>
             {data.document.owner_team ? <Badge>{data.document.owner_team}</Badge> : null}
             <Badge>{data.document.language_code}</Badge>

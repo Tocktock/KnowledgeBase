@@ -8,11 +8,14 @@ KnowledgeHub is a full-stack internal knowledge base project built around a clea
 
 This repository is organized so that the actual application lives under `internal_kb_fullstack/`, while the repository root provides top-level onboarding and a one-shot startup script.
 
+For a full product-level explanation of the shipped glossary-aware system, read [`PRODUCT.md`](./PRODUCT.md).
+
 ## What This Repository Contains
 
 At the root level:
 
 - `README.md`: this document
+- `PRODUCT.md`: comprehensive product documentation
 - `one-shot.sh`: a one-command launcher for the full stack
 - `internal_kb_fullstack/`: the actual application source code and Compose stack
 
