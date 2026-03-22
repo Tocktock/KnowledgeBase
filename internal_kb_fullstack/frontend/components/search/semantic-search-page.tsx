@@ -10,6 +10,12 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import type { SearchExplainResponse, SearchRequest, SearchResponse } from '@/lib/types'
+import {
+  formatEvidenceKindLabel,
+  formatResultTypeLabel,
+  formatSourceSystemLabel,
+  formatStatusLabel,
+} from '@/lib/utils'
 
 async function semanticSearch(payload: SearchRequest) {
   const [searchResponse, explainResponse] = await Promise.all([
@@ -56,21 +62,21 @@ export function SemanticSearchPage() {
     <div className="space-y-6">
       <Card className="overflow-hidden p-6">
         <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-          <Brain className="size-4 text-blue-500" /> 컨셉 인지 검색
+          <Brain className="size-4 text-blue-500" /> 개념 인지 검색
         </div>
         <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-[minmax(0,1fr)_200px_200px_auto]">
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="예: 센디 차량, 내부배차율, 화주 스쿼드" />
-          <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="doc_type 선택" />
-          <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="owner_team 선택" />
+          <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="문서 타입 예: knowledge, runbook" />
+          <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="소유 그룹 예: platform, product" />
           <Button type="submit" className="w-full">
             <Search className="size-4" /> 검색
           </Button>
         </form>
         <div className="mt-4 flex flex-wrap gap-2 text-xs text-neutral-500">
-          <Badge>concept-aware reranking</Badge>
-          <Badge>semantic + keyword</Badge>
-          <Badge>evidence diversification</Badge>
-          <Badge>용어집 우선 exact match</Badge>
+          <Badge>개념 기반 재정렬</Badge>
+          <Badge>의미 + 키워드 검색</Badge>
+          <Badge>다양한 근거 반영</Badge>
+          <Badge>용어집 우선 정확 일치</Badge>
         </div>
       </Card>
 
@@ -81,11 +87,11 @@ export function SemanticSearchPage() {
       {explain ? (
         <Card className="p-5">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <Badge>normalized {explain.normalized_query}</Badge>
-            {explain.resolved_concept_term ? <Badge>concept {explain.resolved_concept_term}</Badge> : <Badge>concept unresolved</Badge>}
-            {explain.resolved_concept_status ? <Badge>{explain.resolved_concept_status}</Badge> : null}
-            {explain.canonical_document_slug ? <Badge>canonical /docs/{explain.canonical_document_slug}</Badge> : null}
-            {explain.weak_grounding ? <Badge className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">weak grounding</Badge> : null}
+            <Badge>검색 기준어 {explain.normalized_query}</Badge>
+            {explain.resolved_concept_term ? <Badge>해석된 개념 {explain.resolved_concept_term}</Badge> : <Badge>개념 해석 없음</Badge>}
+            {explain.resolved_concept_status ? <Badge>{formatStatusLabel(explain.resolved_concept_status)}</Badge> : null}
+            {explain.canonical_document_slug ? <Badge>대표 문서 /docs/{explain.canonical_document_slug}</Badge> : null}
+            {explain.weak_grounding ? <Badge className="border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">근거 부족</Badge> : null}
           </div>
           {explain.notes?.length ? (
             <div className="space-y-2 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
@@ -119,10 +125,10 @@ export function SemanticSearchPage() {
                     {hit.document_title}
                   </Link>
                   <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-400">
-                    <Badge>{hit.result_type ?? 'document'}</Badge>
-                    <Badge>{hit.source_system}</Badge>
-                    {hit.matched_concept_term ? <Badge>concept {hit.matched_concept_term}</Badge> : null}
-                    {hit.evidence_kind ? <Badge>{hit.evidence_kind}</Badge> : null}
+                    <Badge>{formatResultTypeLabel(hit.result_type ?? 'document')}</Badge>
+                    <Badge>출처 {formatSourceSystemLabel(hit.source_system)}</Badge>
+                    {hit.matched_concept_term ? <Badge>관련 개념 {hit.matched_concept_term}</Badge> : null}
+                    {hit.evidence_kind ? <Badge>{formatEvidenceKindLabel(hit.evidence_kind)}</Badge> : null}
                     {hit.section_title ? <Badge>{hit.section_title}</Badge> : null}
                     {hit.heading_path.map((item) => (
                       <Badge key={item}>{item}</Badge>
@@ -130,10 +136,10 @@ export function SemanticSearchPage() {
                   </div>
                 </div>
                 <div className="text-right text-xs text-neutral-400">
-                  <div>hybrid {hit.hybrid_score.toFixed(4)}</div>
-                  {typeof hit.evidence_strength === 'number' ? <div>evidence {hit.evidence_strength.toFixed(2)}</div> : null}
-                  {typeof hit.vector_score === 'number' ? <div>vector {hit.vector_score.toFixed(4)}</div> : null}
-                  {typeof hit.keyword_score === 'number' ? <div>keyword {hit.keyword_score.toFixed(4)}</div> : null}
+                  <div>종합 점수 {hit.hybrid_score.toFixed(4)}</div>
+                  {typeof hit.evidence_strength === 'number' ? <div>근거 강도 {hit.evidence_strength.toFixed(2)}</div> : null}
+                  {typeof hit.vector_score === 'number' ? <div>의미 점수 {hit.vector_score.toFixed(4)}</div> : null}
+                  {typeof hit.keyword_score === 'number' ? <div>키워드 점수 {hit.keyword_score.toFixed(4)}</div> : null}
                 </div>
               </div>
               <p className="text-sm leading-7 text-neutral-600 dark:text-neutral-400">{hit.content_text}</p>
@@ -148,7 +154,7 @@ export function SemanticSearchPage() {
         ) : (
           <Card className="p-10 text-center text-sm text-neutral-500">
             <Sparkles className="mx-auto mb-3 size-5 text-blue-500" />
-            질의를 입력하면 컨셉 해석, 근거 설명, 검색 결과를 함께 보여줍니다.
+            질의를 입력하면 개념 해석, 근거 설명, 검색 결과를 함께 보여줍니다.
           </Card>
         )}
       </div>

@@ -55,7 +55,7 @@ export function CommandPalette() {
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="문서 제목, slug, 본문으로 바로 이동"
+              placeholder="문서 제목, 문서 주소, 본문으로 바로 이동"
               className="border-none px-0 shadow-none focus:border-transparent"
             />
           </div>
@@ -63,7 +63,7 @@ export function CommandPalette() {
 
         <div className="max-h-[65vh] overflow-y-auto p-3">
           <div className="mb-3 flex items-center gap-2 px-2 text-xs font-medium uppercase tracking-[0.18em] text-neutral-400">
-            <Sparkles className="size-3.5" /> quick open
+            <Sparkles className="size-3.5" /> 빠른 열기
           </div>
           {isLoading ? (
             <div className="rounded-2xl p-4 text-sm text-neutral-500">검색 중...</div>

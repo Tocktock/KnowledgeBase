@@ -3,7 +3,7 @@ import { Activity, CheckCircle2, Clock3, LoaderCircle, TriangleAlert } from 'luc
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import type { JobSummary } from '@/lib/types'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatJobKindLabel, formatJobTitle, formatStatusLabel } from '@/lib/utils'
 
 const iconForStatus = {
   queued: Clock3,
@@ -28,19 +28,19 @@ export function JobsPage({ jobs }: { jobs: JobSummary[] }) {
               <div className="mb-3 flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2 text-base font-semibold text-neutral-950 dark:text-neutral-50">
                   <Icon className={`size-4 ${job.status === 'processing' ? 'animate-spin' : ''}`} />
-                  {job.title}
+                  {formatJobTitle(job.title)}
                 </div>
-                <Badge>{job.kind}</Badge>
-                <Badge>{job.status}</Badge>
+                <Badge>{formatJobKindLabel(job.kind)}</Badge>
+                <Badge>{formatStatusLabel(job.status)}</Badge>
                 {job.embedding_model ? <Badge>{job.embedding_model}</Badge> : null}
-                {typeof job.embedding_dimensions === 'number' ? <Badge>{job.embedding_dimensions} dims</Badge> : null}
-                <Badge>priority {job.priority}</Badge>
-                <Badge>attempt {job.attempt_count}</Badge>
+                {typeof job.embedding_dimensions === 'number' ? <Badge>{job.embedding_dimensions}차원</Badge> : null}
+                <Badge>우선순위 {job.priority}</Badge>
+                <Badge>시도 {job.attempt_count}회</Badge>
               </div>
               <div className="grid gap-2 text-sm text-neutral-600 dark:text-neutral-400 md:grid-cols-3">
-                <div>requested: {formatDate(job.requested_at)}</div>
-                <div>started: {formatDate(job.started_at)}</div>
-                <div>finished: {formatDate(job.finished_at)}</div>
+                <div>요청 시각: {formatDate(job.requested_at)}</div>
+                <div>시작 시각: {formatDate(job.started_at)}</div>
+                <div>완료 시각: {formatDate(job.finished_at)}</div>
               </div>
               {job.error_message ? (
                 <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-950 dark:bg-red-950/30 dark:text-red-300">

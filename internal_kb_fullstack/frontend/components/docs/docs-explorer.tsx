@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import type { DocumentListResponse } from '@/lib/types'
-import { formatDate, formatDocTypeLabel, sentence } from '@/lib/utils'
+import { formatDate, formatDocTypeLabel, formatOwnerTeamLabel, formatStatusLabel, sentence } from '@/lib/utils'
 
 async function fetchDocuments(params: Record<string, string>) {
   const search = new URLSearchParams(params)
@@ -43,8 +43,8 @@ export function DocsExplorer() {
           <Filter className="size-4 text-blue-500" /> 탐색 필터
         </div>
         <div className="grid gap-3 md:grid-cols-3">
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="제목 / slug / 본문 검색" />
-          <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="팀 필터" />
+          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="제목 / 문서 주소 / 본문 검색" />
+          <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="소유 그룹 필터" />
           <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="문서 타입 필터" />
         </div>
       </Card>
@@ -77,8 +77,8 @@ export function DocsExplorer() {
                   </div>
                   <p className="mb-4 line-clamp-4 text-sm leading-7 text-neutral-600 dark:text-neutral-400">{sentence(item.excerpt, 220)}</p>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
-                    {item.owner_team ? <Badge>{item.owner_team}</Badge> : null}
-                    <Badge>{item.status}</Badge>
+                    {item.owner_team ? <Badge>{formatOwnerTeamLabel(item.owner_team)}</Badge> : null}
+                    <Badge>{formatStatusLabel(item.status)}</Badge>
                     <span>{formatDate(item.updated_at)}</span>
                   </div>
                 </Card>

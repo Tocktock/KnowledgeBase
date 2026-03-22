@@ -41,7 +41,7 @@ import type {
   IngestDocumentResponse,
   SlugConflictDetail,
 } from '@/lib/types'
-import { slugify } from '@/lib/utils'
+import { formatStatusLabel, slugify } from '@/lib/utils'
 
 type EditorMode = 'visual' | 'source' | 'preview'
 
@@ -232,7 +232,7 @@ export function DocumentEditor() {
   const submitDisabled = !title.trim() || !slug.trim() || !markdown.trim() || createMutation.isPending
   const tips = useMemo(
     () => [
-      '[[slug]] 또는 [[slug|표시명]] 문법을 그대로 써도 됩니다.',
+      '[[문서주소]] 또는 [[문서주소|표시명]] 문법을 그대로 써도 됩니다.',
       '시각 편집 모드와 위키 소스 모드를 즉시 전환할 수 있습니다.',
       '정의 초안 생성은 기존 문서를 검색해 인용과 함께 편집 가능한 Markdown을 채웁니다.',
       '저장하면 백엔드가 바로 청크를 만들고 임베딩 작업을 큐에 넣습니다.',
@@ -264,7 +264,7 @@ export function DocumentEditor() {
   })
 
   const insertInternalLink = () => {
-    const rawSlug = window.prompt('링크할 문서 slug를 입력하세요', slug || 'example-doc')
+    const rawSlug = window.prompt('링크할 문서 주소를 입력하세요', slug || 'example-doc')
     if (!rawSlug) return
     const normalized = slugify(rawSlug)
     const label = window.prompt('표시할 텍스트를 입력하세요', normalized) || normalized
@@ -327,7 +327,7 @@ export function DocumentEditor() {
               <div>
                 <div className="mb-2 flex items-center gap-2">
                   <Badge>Visual + Wiki Source</Badge>
-                  <Badge className="border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">Tiptap Markdown</Badge>
+                  <Badge className="border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">위키 문서 편집</Badge>
                 </div>
                 <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">새 문서 작성</h1>
                 <p className="mt-2 text-sm leading-6 text-neutral-500">노션처럼 깔끔하게 쓰고, 위키처럼 서로 연결되는 문서를 만듭니다.</p>
@@ -351,7 +351,7 @@ export function DocumentEditor() {
                 <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: 배포 체크리스트" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">slug</label>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 주소</label>
                 <Input value={slug} onChange={(event) => setSlug(slugify(event.target.value))} placeholder="예: deployment-checklist" />
               </div>
               <div>
@@ -359,8 +359,8 @@ export function DocumentEditor() {
                 <Input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="선택 입력" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 팀</label>
-                <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="예: platform" />
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 그룹</label>
+                <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="예: platform, product" />
               </div>
               <div>
                 <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 타입</label>
@@ -377,7 +377,7 @@ export function DocumentEditor() {
                   size="sm"
                   onClick={() => setStatus(value)}
                 >
-                  {value}
+                  {formatStatusLabel(value)}
                 </Button>
               ))}
             </div>
@@ -437,23 +437,23 @@ export function DocumentEditor() {
 
           {pendingSlugConflict ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
-              <div className="font-medium">같은 slug 문서가 이미 있습니다.</div>
+              <div className="font-medium">같은 문서 주소의 문서가 이미 있습니다.</div>
               <div className="mt-2 leading-6">
                 이 문서를 저장하면 기존 문서에 새 리비전을 추가합니다.
                 <div className="mt-2 rounded-xl bg-white/70 px-3 py-3 text-xs leading-6 text-amber-900 dark:bg-neutral-950/40 dark:text-amber-100">
                   <div>제목: {pendingSlugConflict.document.title}</div>
-                  <div>slug: {pendingSlugConflict.document.slug}</div>
-                  <div>상태: {pendingSlugConflict.document.status}</div>
-                  <div>소유 팀: {pendingSlugConflict.document.owner_team || '미지정'}</div>
+                  <div>문서 주소: {pendingSlugConflict.document.slug}</div>
+                  <div>상태: {formatStatusLabel(pendingSlugConflict.document.status)}</div>
+                  <div>소유 그룹: {pendingSlugConflict.document.owner_team || '미지정'}</div>
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-3">
                 <Button type="button" onClick={handleConfirmSlugUpdate} disabled={createMutation.isPending}>
                   {createMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : null}
-                  Update existing document
+                  기존 문서에 새 버전 추가
                 </Button>
                 <Button type="button" variant="outline" onClick={handleCancelSlugUpdate} disabled={createMutation.isPending}>
-                  Cancel
+                  취소
                 </Button>
               </div>
             </div>
@@ -478,26 +478,26 @@ export function DocumentEditor() {
             <div className="space-y-4">
               <div>
                 <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">정의할 주제</label>
-                <Input value={definitionTopic} onChange={(event) => setDefinitionTopic(event.target.value)} placeholder="예: Transport" />
+                <Input value={definitionTopic} onChange={(event) => setDefinitionTopic(event.target.value)} placeholder="예: 센디 차량" />
               </div>
               <div>
                 <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">도메인 / 맥락</label>
-                <Input value={definitionDomain} onChange={(event) => setDefinitionDomain(event.target.value)} placeholder="예: delivery operations" />
+                <Input value={definitionDomain} onChange={(event) => setDefinitionDomain(event.target.value)} placeholder="예: 배송 운영" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: source system</label>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 출처</label>
                 <Input
                   value={generationSourceSystem}
                   onChange={(event) => setGenerationSourceSystem(event.target.value)}
-                  placeholder="선택 입력 예: notion-export"
+                  placeholder="선택 입력 예: notion-export, manual"
                 />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 소유 팀</label>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 소유 그룹</label>
                 <Input
                   value={generationOwnerTeam}
                   onChange={(event) => setGenerationOwnerTeam(event.target.value)}
-                  placeholder="선택 입력 예: logistics"
+                  placeholder="선택 입력 예: product, logistics"
                 />
               </div>
               <div>
@@ -513,7 +513,7 @@ export function DocumentEditor() {
               </Button>
               {generatedReferences.length ? (
                 <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">References Used</div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">참고한 문서</div>
                   {generatedReferences.map((reference) => (
                     <div key={`${reference.document_slug}-${reference.index}`} className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm dark:border-neutral-800">
                       <a href={`/docs/${reference.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
@@ -551,11 +551,11 @@ export function DocumentEditor() {
                 <Input name="title" placeholder="업로드 문서 제목" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">slug</label>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 주소</label>
                 <Input name="slug" placeholder="선택 입력" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">팀</label>
+                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 그룹</label>
                 <Input name="owner_team" defaultValue={ownerTeam} />
               </div>
               <div>

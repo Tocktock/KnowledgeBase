@@ -14,7 +14,13 @@ import type {
   GlossaryConceptSummary,
   JobSummary,
 } from '@/lib/types'
-import { formatDocTypeLabel } from '@/lib/utils'
+import {
+  formatConceptTypeLabel,
+  formatDocTypeLabel,
+  formatEvidenceKindLabel,
+  formatOwnerTeamLabel,
+  formatStatusLabel,
+} from '@/lib/utils'
 
 async function fetchGlossaryList(params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams()
@@ -171,20 +177,20 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => void runAction(() => refreshGlossary('incremental'), '증분 리프레시 작업을 등록했습니다.')} disabled={acting}>
-              <RefreshCcw className="size-4" /> Incremental refresh
+            <Button type="button" variant="outline" onClick={() => void runAction(() => refreshGlossary('incremental'), '변경분 새로고침 작업을 등록했습니다.')} disabled={acting}>
+              <RefreshCcw className="size-4" /> 변경분 새로고침
             </Button>
-            <Button type="button" onClick={() => void runAction(() => refreshGlossary('full'), '전체 리프레시 작업을 등록했습니다.')} disabled={acting}>
-              <Sparkles className="size-4" /> Full refresh
+            <Button type="button" onClick={() => void runAction(() => refreshGlossary('full'), '전체 새로고침 작업을 등록했습니다.')} disabled={acting}>
+              <Sparkles className="size-4" /> 전체 새로고침
             </Button>
           </div>
         </div>
 
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_180px_180px_auto]">
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="용어 / 별칭 검색" />
-          <Input value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} placeholder="status" />
-          <Input value={conceptType} onChange={(event) => setConceptType(event.target.value)} placeholder="concept_type" />
-          <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="owner_team" />
+          <Input value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} placeholder="상태 값 예: suggested, approved" />
+          <Input value={conceptType} onChange={(event) => setConceptType(event.target.value)} placeholder="개념 유형 예: term, product" />
+          <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="소유 그룹 예: product" />
           <Button type="button" variant="outline" onClick={() => void loadList()} disabled={loadingList}>
             {loadingList ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
             필터 적용
@@ -211,12 +217,12 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 }`}
               >
                 <div className="mb-2 flex flex-wrap gap-2">
-                  <Badge>{concept.status}</Badge>
-                  <Badge>{concept.concept_type}</Badge>
-                  <Badge>{concept.support_doc_count} docs</Badge>
+                  <Badge>{formatStatusLabel(concept.status)}</Badge>
+                  <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
+                  <Badge>근거 문서 {concept.support_doc_count}개</Badge>
                 </div>
                 <div className="font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
-                <div className="mt-1 text-xs text-neutral-500">score {concept.confidence_score.toFixed(2)}</div>
+                <div className="mt-1 text-xs text-neutral-500">신뢰도 {concept.confidence_score.toFixed(2)}</div>
                 {concept.aliases.length ? (
                   <div className="mt-2 text-xs leading-6 text-neutral-500">{concept.aliases.slice(0, 4).join(', ')}</div>
                 ) : null}
@@ -235,17 +241,17 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="mb-2 flex flex-wrap gap-2">
-                      <Badge>{detail.concept.status}</Badge>
-                      <Badge>{detail.concept.concept_type}</Badge>
-                      <Badge>{detail.concept.support_doc_count} docs</Badge>
-                      <Badge>{detail.concept.support_chunk_count} chunks</Badge>
+                      <Badge>{formatStatusLabel(detail.concept.status)}</Badge>
+                      <Badge>{formatConceptTypeLabel(detail.concept.concept_type)}</Badge>
+                      <Badge>근거 문서 {detail.concept.support_doc_count}개</Badge>
+                      <Badge>근거 구간 {detail.concept.support_chunk_count}개</Badge>
                     </div>
                     <h2 className="text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{detail.concept.display_term}</h2>
-                    <div className="mt-2 text-sm text-neutral-500">normalized: {detail.concept.normalized_term}</div>
+                    <div className="mt-2 text-sm text-neutral-500">정규화 용어: {detail.concept.normalized_term}</div>
                   </div>
                   <div className="text-right text-sm text-neutral-500">
-                    <div>score {detail.concept.confidence_score.toFixed(2)}</div>
-                    <div>{detail.concept.owner_team_hint || 'owner team 미지정'}</div>
+                    <div>신뢰도 {detail.concept.confidence_score.toFixed(2)}</div>
+                    <div>{detail.concept.owner_team_hint ? formatOwnerTeamLabel(detail.concept.owner_team_hint) : '소유 그룹 미지정'}</div>
                   </div>
                 </div>
 
@@ -256,16 +262,16 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <Button type="button" onClick={() => detail && void runAction(() => generateDraft(detail.concept.id, draftDomain), '용어집 초안을 생성했습니다.')} disabled={acting || !detail}>
                     {acting ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                    Draft 생성
+                    초안 만들기
                   </Button>
                   <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, approvePayload), '개념을 승인했습니다.')} disabled={acting || !detail}>
-                    Approve
+                    승인
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'ignore' }), '개념을 무시 상태로 변경했습니다.')} disabled={acting || !detail}>
-                    Ignore
+                  <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'ignore' }), '개념을 제외했습니다.')} disabled={acting || !detail}>
+                    제외
                   </Button>
-                  <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'mark_stale' }), '개념을 stale 상태로 변경했습니다.')} disabled={acting || !detail}>
-                    Mark stale
+                  <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'mark_stale' }), '개념을 최신성 낮음 상태로 표시했습니다.')} disabled={acting || !detail}>
+                    최신성 낮음 표시
                   </Button>
                 </div>
 
@@ -278,7 +284,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                     <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">생성된 문서</div>
                     {detail.concept.generated_document ? (
                       <Link href={`/docs/${detail.concept.generated_document.slug}`} className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400">
-                        /docs/{detail.concept.generated_document.slug}
+                        {detail.concept.generated_document.title}
                       </Link>
                     ) : (
                       <div className="text-sm text-neutral-500">아직 초안이 없습니다.</div>
@@ -288,14 +294,14 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
 
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-2">
-                    <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">merge_into_concept_id</div>
-                    <Input value={mergeInto} onChange={(event) => setMergeInto(event.target.value)} placeholder="대상 concept UUID" />
+                    <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">합칠 대상 개념 ID</div>
+                    <Input value={mergeInto} onChange={(event) => setMergeInto(event.target.value)} placeholder="대상 개념 ID를 입력하세요" />
                     <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'merge', merge_into_concept_id: mergeInto }), '개념을 병합했습니다.')} disabled={acting || !detail || !mergeInto.trim()}>
-                      Merge
+                      병합
                     </Button>
                   </div>
                   <div className="space-y-2">
-                    <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">split aliases</div>
+                    <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">분리할 별칭</div>
                     <Input value={splitAliases} onChange={(event) => setSplitAliases(event.target.value)} placeholder="별칭1, 별칭2" />
                     <Button
                       type="button"
@@ -316,7 +322,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                       }
                       disabled={acting || !detail || !splitAliases.trim()}
                     >
-                      Split
+                      별칭 분리
                     </Button>
                   </div>
                 </div>
@@ -333,8 +339,8 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 {detail.supports.slice(0, 16).map((support) => (
                   <div key={support.id} className="rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
                     <div className="mb-2 flex flex-wrap gap-2">
-                      <Badge>{support.evidence_kind}</Badge>
-                      <Badge>{support.evidence_strength.toFixed(2)}</Badge>
+                      <Badge>{formatEvidenceKindLabel(support.evidence_kind)}</Badge>
+                      <Badge>근거 강도 {support.evidence_strength.toFixed(2)}</Badge>
                       <Badge>{formatDocTypeLabel(support.document_doc_type)}</Badge>
                     </div>
                     <Link href={`/docs/${support.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
@@ -354,11 +360,11 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 {detail.related_concepts.map((concept) => (
                   <Link key={concept.id} href={`/glossary/${concept.slug}`} className="rounded-2xl border border-neutral-200 px-4 py-3 transition hover:border-blue-300 dark:border-neutral-800 dark:hover:border-blue-900">
                     <div className="mb-2 flex flex-wrap gap-2">
-                      <Badge>{concept.status}</Badge>
-                      <Badge>{concept.concept_type}</Badge>
+                      <Badge>{formatStatusLabel(concept.status)}</Badge>
+                      <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                     </div>
                     <div className="font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
-                    <div className="mt-1 text-xs text-neutral-500">score {concept.confidence_score.toFixed(2)}</div>
+                    <div className="mt-1 text-xs text-neutral-500">신뢰도 {concept.confidence_score.toFixed(2)}</div>
                   </Link>
                 ))}
               </div>

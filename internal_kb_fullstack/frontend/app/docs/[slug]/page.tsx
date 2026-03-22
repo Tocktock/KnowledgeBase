@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getDocumentBySlug, getDocumentRelations } from '@/lib/api/server'
 import type { DocumentRelationsResponse } from '@/lib/types'
-import { formatDate, formatDocTypeLabel } from '@/lib/utils'
+import { formatDate, formatDocTypeLabel, formatLanguageLabel, formatOwnerTeamLabel, formatStatusLabel } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,20 +29,20 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
             <Badge className={data.document.doc_type === 'glossary' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300' : ''}>
               {formatDocTypeLabel(data.document.doc_type)}
             </Badge>
-            <Badge>{data.document.status}</Badge>
-            {data.document.owner_team ? <Badge>{data.document.owner_team}</Badge> : null}
-            <Badge>{data.document.language_code}</Badge>
+            <Badge>{formatStatusLabel(data.document.status)}</Badge>
+            {data.document.owner_team ? <Badge>{formatOwnerTeamLabel(data.document.owner_team)}</Badge> : null}
+            <Badge>{formatLanguageLabel(data.document.language_code)}</Badge>
           </div>
           <h1 className="text-4xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{data.document.title}</h1>
           <div className="mt-4 flex flex-wrap gap-4 text-sm text-neutral-500 dark:text-neutral-400">
-            <div className="inline-flex items-center gap-2"><FileText className="size-4" /> /{data.document.slug}</div>
+            <div className="inline-flex items-center gap-2"><FileText className="size-4" /> 문서 주소 /{data.document.slug}</div>
             <div className="inline-flex items-center gap-2"><Clock3 className="size-4" /> 업데이트 {formatDate(data.document.updated_at)}</div>
-            {data.revision ? <div className="inline-flex items-center gap-2"><BookMarked className="size-4" /> rev {data.revision.revision_number}</div> : null}
+            {data.revision ? <div className="inline-flex items-center gap-2"><BookMarked className="size-4" /> 버전 {data.revision.revision_number}</div> : null}
             <div className="inline-flex items-center gap-2"><Link2 className="size-4" /> 링크 {linkedSlugs.length}개</div>
           </div>
           {data.document.source_url ? (
             <div className="mt-4 text-sm text-neutral-500">
-              source:{' '}
+              원본 링크:{' '}
               <a className="text-blue-600 underline decoration-blue-200 underline-offset-4 dark:text-blue-400" href={data.document.source_url} target="_blank" rel="noreferrer">
                 {data.document.source_url}
               </a>
