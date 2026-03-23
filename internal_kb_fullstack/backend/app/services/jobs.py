@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.utils import utcnow
-from app.db.models import Document, EmbeddingJob, GlossaryJob, JobStatus, KnowledgeConcept
+from app.db.models import ConnectorSyncJob, ConnectorSyncTarget, Document, EmbeddingJob, GlossaryJob, JobStatus, KnowledgeConcept
 from app.schemas.jobs import JobSummary
 from app.services.catalog import get_document_detail
 
@@ -96,6 +96,13 @@ def _glossary_job_title(job: GlossaryJob, concepts_by_id: dict[UUID, KnowledgeCo
     return "Glossary draft"
 
 
+def _connector_job_title(job: ConnectorSyncJob, targets_by_id: dict[UUID, ConnectorSyncTarget]) -> str:
+    target = targets_by_id.get(job.target_id)
+    if target is not None:
+        return f"Drive 동기화: {target.name}"
+    return "Drive 동기화"
+
+
 async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[JobSummary]:
     embedding_jobs = list(
         (
@@ -105,6 +112,11 @@ async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[Jo
     glossary_jobs = list(
         (
             await session.execute(select(GlossaryJob).order_by(GlossaryJob.requested_at.desc()).limit(limit))
+        ).scalars().all()
+    )
+    connector_jobs = list(
+        (
+            await session.execute(select(ConnectorSyncJob).order_by(ConnectorSyncJob.requested_at.desc()).limit(limit))
         ).scalars().all()
     )
     document_ids = {job.document_id for job in embedding_jobs}
@@ -121,6 +133,13 @@ async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[Jo
             await session.execute(select(KnowledgeConcept).where(KnowledgeConcept.id.in_(concept_ids)))
         ).scalars().all()
     } if concept_ids else {}
+    target_ids = {job.target_id for job in connector_jobs}
+    targets_by_id = {
+        target.id: target
+        for target in (
+            await session.execute(select(ConnectorSyncTarget).where(ConnectorSyncTarget.id.in_(target_ids)))
+        ).scalars().all()
+    } if target_ids else {}
 
     summaries = [
         JobSummary.model_validate(job).model_copy(
@@ -139,6 +158,16 @@ async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[Jo
             }
         )
         for job in glossary_jobs
+    ] + [
+        JobSummary.model_validate(job).model_copy(
+            update={
+                "kind": job.kind,
+                "title": _connector_job_title(job, targets_by_id),
+                "target_id": job.target_id,
+                "connection_id": job.connection_id,
+            }
+        )
+        for job in connector_jobs
     ]
     return sorted(summaries, key=lambda item: item.requested_at, reverse=True)[:limit]
 
@@ -159,16 +188,31 @@ async def get_job_summary(session: AsyncSession, job_id: UUID) -> JobSummary | N
         )
 
     glossary_job = await session.get(GlossaryJob, job_id)
-    if glossary_job is None:
+    if glossary_job is not None:
+        concept = await session.get(KnowledgeConcept, glossary_job.target_concept_id) if glossary_job.target_concept_id is not None else None
+        return JobSummary.model_validate(glossary_job).model_copy(
+            update={
+                "kind": glossary_job.kind,
+                "title": _glossary_job_title(
+                    glossary_job,
+                    {concept.id: concept} if concept is not None else {},
+                ),
+            }
+        )
+
+    connector_job = await session.get(ConnectorSyncJob, job_id)
+    if connector_job is None:
         return None
 
-    concept = await session.get(KnowledgeConcept, glossary_job.target_concept_id) if glossary_job.target_concept_id is not None else None
-    return JobSummary.model_validate(glossary_job).model_copy(
+    target = await session.get(ConnectorSyncTarget, connector_job.target_id)
+    return JobSummary.model_validate(connector_job).model_copy(
         update={
-            "kind": glossary_job.kind,
-            "title": _glossary_job_title(
-                glossary_job,
-                {concept.id: concept} if concept is not None else {},
+            "kind": connector_job.kind,
+            "title": _connector_job_title(
+                connector_job,
+                {target.id: target} if target is not None else {},
             ),
+            "target_id": connector_job.target_id,
+            "connection_id": connector_job.connection_id,
         }
     )

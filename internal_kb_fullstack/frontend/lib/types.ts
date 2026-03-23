@@ -140,6 +140,8 @@ export type JobSummary = {
   revision_id?: string | null
   target_concept_id?: string | null
   target_document_id?: string | null
+  target_id?: string | null
+  connection_id?: string | null
   status: string
   embedding_model?: string | null
   embedding_dimensions?: number | null
@@ -278,6 +280,107 @@ export type SlugConflictDetail = {
   code: 'slug_conflict'
   message: string
   document: SlugConflictDocument
+}
+
+export type UserSummary = {
+  id: string
+  email: string
+  name: string
+  avatar_url?: string | null
+  roles: string[]
+  is_admin: boolean
+  last_login_at?: string | null
+}
+
+export type AuthMeResponse = {
+  authenticated: boolean
+  user?: UserSummary | null
+}
+
+export type OAuthStartResponse = {
+  authorization_url: string
+  state: string
+}
+
+export type AuthCallbackResponse = {
+  session_token: string
+  redirect_to: string
+  user: UserSummary
+}
+
+export type ConnectorTargetSummary = {
+  id: string
+  connection_id: string
+  target_type: string
+  external_id: string
+  name: string
+  include_subfolders: boolean
+  sync_mode: string
+  sync_interval_minutes?: number | null
+  status: string
+  last_sync_started_at?: string | null
+  last_sync_completed_at?: string | null
+  next_auto_sync_at?: string | null
+  last_sync_summary: Record<string, number>
+}
+
+export type ConnectorConnectionSummary = {
+  id: string
+  provider: string
+  owner_scope: string
+  owner_user_id?: string | null
+  display_name: string
+  account_email?: string | null
+  account_subject: string
+  status: string
+  granted_scopes: string[]
+  last_validated_at?: string | null
+  created_at: string
+  updated_at: string
+  targets: ConnectorTargetSummary[]
+}
+
+export type ConnectorListResponse = {
+  items: ConnectorConnectionSummary[]
+}
+
+export type ConnectorReadinessResponse = {
+  oauth_configured: boolean
+  organization_connection_exists: boolean
+  organization_connection_status?: string | null
+  viewer_can_manage_org_connection: boolean
+}
+
+export type ConnectorBrowseItem = {
+  id: string
+  name: string
+  kind: string
+  mime_type?: string | null
+  drive_id?: string | null
+  parent_id?: string | null
+}
+
+export type ConnectorBrowseResponse = {
+  items: ConnectorBrowseItem[]
+  kind: string
+  parent_id?: string | null
+  drive_id?: string | null
+}
+
+export type ConnectorSourceItemSummary = {
+  id: string
+  target_id: string
+  external_file_id: string
+  mime_type?: string | null
+  name: string
+  source_url?: string | null
+  source_revision_id?: string | null
+  internal_document_id?: string | null
+  item_status: string
+  unsupported_reason?: string | null
+  error_message?: string | null
+  last_seen_at?: string | null
+  last_synced_at?: string | null
 }
 
 export type GenerateDefinitionDraftRequest = {

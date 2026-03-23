@@ -11,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.utils import utcnow
-from app.db.models import DocumentChunk, EmbeddingCache, EmbeddingJob, GlossaryJob, GlossaryJobKind
+from app.db.models import ConnectorSyncJob, DocumentChunk, EmbeddingCache, EmbeddingJob, GlossaryJob, GlossaryJobKind
+from app.services.connectors import (
+    acquire_next_connector_sync_job,
+    enqueue_due_sync_jobs,
+    mark_connector_job_failed,
+    process_connector_sync_job,
+)
 from app.services.embeddings import get_embedding_service
 from app.services.glossary import create_or_regenerate_glossary_draft, refresh_glossary_concepts
 
@@ -341,6 +347,21 @@ async def run_worker_loop(session_factory: async_sessionmaker[AsyncSession]) -> 
     configure_logging()
 
     while True:
+        async with session_factory() as session:
+            await enqueue_due_sync_jobs(session)
+            connector_job: ConnectorSyncJob | None = await acquire_next_connector_sync_job(session)
+            await session.commit()
+
+        if connector_job is not None:
+            try:
+                await process_connector_sync_job(session_factory, connector_job.id)
+            except Exception as exc:  # noqa: BLE001
+                async with session_factory() as session:
+                    await mark_connector_job_failed(session, connector_job.id, str(exc))
+                    await session.commit()
+                await asyncio.sleep(settings.worker_poll_seconds)
+            continue
+
         async with session_factory() as session:
             job = await acquire_next_job(session)
             await session.commit()

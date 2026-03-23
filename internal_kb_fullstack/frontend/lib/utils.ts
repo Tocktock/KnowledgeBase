@@ -23,6 +23,8 @@ const STATUS_LABELS: Record<string, string> = {
   completed: '완료',
   failed: '실패',
   cancelled: '취소됨',
+  active: '활성',
+  paused: '일시중지',
 }
 
 const CONCEPT_TYPE_LABELS: Record<string, string> = {
@@ -41,6 +43,7 @@ const SOURCE_SYSTEM_LABELS: Record<string, string> = {
   notion: '노션',
   'notion-export': '노션 가져오기',
   glossary: '용어집',
+  'google-drive': 'Google Drive',
 }
 
 const RESULT_TYPE_LABELS: Record<string, string> = {
@@ -67,6 +70,37 @@ const JOB_KIND_LABELS: Record<string, string> = {
   embedding: '임베딩',
   refresh: '용어집 새로고침',
   draft: '용어집 초안',
+  connector_sync: '연결 동기화',
+}
+
+const CONNECTOR_STATUS_LABELS: Record<string, string> = {
+  active: '정상 연결',
+  needs_reauth: '재인증 필요',
+  revoked: '권한 해제됨',
+  disconnected: '연결 해제됨',
+}
+
+const CONNECTOR_SCOPE_LABELS: Record<string, string> = {
+  shared: '조직 연결',
+  user: '내 연결',
+}
+
+const CONNECTOR_TARGET_TYPE_LABELS: Record<string, string> = {
+  folder: '폴더',
+  shared_drive: '공유 드라이브',
+}
+
+const CONNECTOR_SYNC_MODE_LABELS: Record<string, string> = {
+  manual: '수동',
+  auto: '자동',
+}
+
+const CONNECTOR_ITEM_STATUS_LABELS: Record<string, string> = {
+  imported: '가져옴',
+  unchanged: '변경 없음',
+  unsupported: '지원하지 않음',
+  failed: '실패',
+  deleted: '대상에서 사라짐',
 }
 
 function formatMappedLabel(value: string | null | undefined, labels: Record<string, string>) {
@@ -138,6 +172,26 @@ export function formatJobKindLabel(value?: string | null) {
   return formatMappedLabel(value, JOB_KIND_LABELS)
 }
 
+export function formatConnectorStatusLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_STATUS_LABELS)
+}
+
+export function formatConnectorScopeLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_SCOPE_LABELS)
+}
+
+export function formatConnectorTargetTypeLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_TARGET_TYPE_LABELS)
+}
+
+export function formatConnectorSyncModeLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_SYNC_MODE_LABELS)
+}
+
+export function formatConnectorItemStatusLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_ITEM_STATUS_LABELS)
+}
+
 export function formatOwnerTeamLabel(value?: string | null) {
   if (!value) return ''
   return `소유 그룹 ${value}`
@@ -151,5 +205,6 @@ export function formatJobTitle(value?: string | null) {
   if (value.startsWith('Glossary draft: ')) return `용어집 초안 생성: ${value.slice('Glossary draft: '.length)}`
   if (value === 'Glossary refresh (full)') return '용어집 새로고침 (전체)'
   if (value === 'Glossary refresh (incremental)') return '용어집 새로고침 (변경분)'
+  if (value === 'Drive 동기화') return 'Drive 동기화'
   return value
 }

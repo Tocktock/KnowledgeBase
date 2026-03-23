@@ -16,6 +16,8 @@ class JobSummary(BaseModel):
     revision_id: UUID | None = None
     target_concept_id: UUID | None = None
     target_document_id: UUID | None = None
+    target_id: UUID | None = None
+    connection_id: UUID | None = None
     embedding_model: str | None = None
     embedding_dimensions: int | None = None
     batch_size: int | None = None

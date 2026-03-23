@@ -7,11 +7,13 @@ from typing import Any
 
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Computed,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -71,6 +73,64 @@ class GlossaryJobScope(str, enum.Enum):
     incremental = "incremental"
 
 
+class UserStatus(str, enum.Enum):
+    active = "active"
+    disabled = "disabled"
+
+
+class UserRoleKind(str, enum.Enum):
+    admin = "admin"
+    member = "member"
+
+
+class ConnectorProvider(str, enum.Enum):
+    google_drive = "google_drive"
+
+
+class ConnectorOwnerScope(str, enum.Enum):
+    shared = "shared"
+    user = "user"
+
+
+class ConnectorStatus(str, enum.Enum):
+    active = "active"
+    needs_reauth = "needs_reauth"
+    revoked = "revoked"
+    disconnected = "disconnected"
+
+
+class ConnectorOAuthPurpose(str, enum.Enum):
+    login = "login"
+    connect_drive = "connect_drive"
+
+
+class ConnectorTargetType(str, enum.Enum):
+    folder = "folder"
+    shared_drive = "shared_drive"
+
+
+class ConnectorTargetStatus(str, enum.Enum):
+    active = "active"
+    paused = "paused"
+
+
+class ConnectorSyncMode(str, enum.Enum):
+    manual = "manual"
+    auto = "auto"
+
+
+class ConnectorSourceItemStatus(str, enum.Enum):
+    imported = "imported"
+    unchanged = "unchanged"
+    unsupported = "unsupported"
+    failed = "failed"
+    deleted = "deleted"
+
+
+class ConnectorSyncJobKind(str, enum.Enum):
+    sync = "connector_sync"
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
@@ -99,6 +159,119 @@ class Document(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    google_subject: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text(), nullable=False)
+    avatar_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=UserStatus.active.value)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    session_token_hash: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    __table_args__ = (UniqueConstraint("user_id", "role", name="uq_user_roles_user_role"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConnectorOAuthState(Base):
+    __tablename__ = "connector_oauth_states"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    state: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    purpose: Mapped[str] = mapped_column(String(30), nullable=False)
+    owner_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    code_verifier: Mapped[str] = mapped_column(Text(), nullable=False)
+    return_path: Mapped[str] = mapped_column(Text(), nullable=False, server_default="/")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConnectorConnection(Base):
+    __tablename__ = "connector_connections"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    owner_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    display_name: Mapped[str] = mapped_column(Text(), nullable=False)
+    account_email: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    account_subject: Mapped[str] = mapped_column(Text(), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorStatus.active.value)
+    encrypted_access_token: Mapped[str] = mapped_column(Text(), nullable=False)
+    encrypted_refresh_token: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    granted_scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConnectorSyncTarget(Base):
+    __tablename__ = "connector_sync_targets"
+    __table_args__ = (UniqueConstraint("connection_id", "target_type", "external_id", name="uq_connector_target_external"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_connections.id", ondelete="CASCADE"), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    external_id: Mapped[str] = mapped_column(Text(), nullable=False)
+    name: Mapped[str] = mapped_column(Text(), nullable=False)
+    include_subfolders: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="true")
+    sync_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorSyncMode.manual.value)
+    sync_interval_minutes: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorTargetStatus.active.value)
+    sync_cursor: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    last_sync_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_auto_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ConnectorSourceItem(Base):
+    __tablename__ = "connector_source_items"
+    __table_args__ = (UniqueConstraint("connection_id", "target_id", "external_file_id", name="uq_connector_source_item_external"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_connections.id", ondelete="CASCADE"), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_sync_targets.id", ondelete="CASCADE"), nullable=False)
+    external_file_id: Mapped[str] = mapped_column(Text(), nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    name: Mapped[str] = mapped_column(Text(), nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    source_revision_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    internal_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
+    item_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    unsupported_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class DocumentRevision(Base):
@@ -215,6 +388,25 @@ class EmbeddingJob(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ConnectorSyncJob(Base):
+    __tablename__ = "connector_sync_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    kind: Mapped[str] = mapped_column(String(30), nullable=False, server_default=ConnectorSyncJobKind.sync.value)
+    connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_connections.id", ondelete="CASCADE"), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_sync_targets.id", ondelete="CASCADE"), nullable=False)
+    sync_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorSyncMode.manual.value)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=JobStatus.queued.value)
+    priority: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="90")
+    attempt_count: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="0")
+    error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class DocumentLink(Base):
     __tablename__ = "document_links"
     __table_args__ = (
@@ -303,3 +495,14 @@ class GlossaryJob(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+Index("ix_users_email", User.email)
+Index("ix_user_sessions_user_id", UserSession.user_id)
+Index("ix_connector_oauth_states_expires_at", ConnectorOAuthState.expires_at)
+Index("ix_connector_connections_owner_scope", ConnectorConnection.owner_scope, ConnectorConnection.owner_user_id)
+Index("ix_connector_sync_targets_connection_id", ConnectorSyncTarget.connection_id)
+Index("ix_connector_sync_targets_auto_due", ConnectorSyncTarget.sync_mode, ConnectorSyncTarget.next_auto_sync_at)
+Index("ix_connector_source_items_document_id", ConnectorSourceItem.internal_document_id)
+Index("ix_connector_source_items_target_status", ConnectorSourceItem.target_id, ConnectorSourceItem.item_status)
+Index("ix_connector_sync_jobs_status_priority_requested", ConnectorSyncJob.status, ConnectorSyncJob.priority, ConnectorSyncJob.requested_at)

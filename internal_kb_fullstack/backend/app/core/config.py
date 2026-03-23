@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     )
 
     api_port: int = 8000
+    app_public_url: str = "http://localhost:3000"
+    admin_emails_raw: str = Field(default="", alias="ADMIN_EMAILS")
 
     embedding_provider: str = "openai"
     embedding_api_key: str = ""
@@ -41,6 +43,14 @@ class Settings(BaseSettings):
     generation_reference_limit: int = 8
     generation_search_limit: int = 12
 
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str | None = None
+    connector_token_encryption_key: str = ""
+    session_encryption_key: str = ""
+    session_max_age_seconds: int = 60 * 60 * 24 * 14
+    oauth_state_ttl_seconds: int = 60 * 10
+
     chunk_target_tokens: int = 600
     chunk_max_tokens: int = 800
     chunk_overlap_tokens: int = 80
@@ -58,6 +68,10 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         return self.database_url.replace("+psycopg", "", 1)
+
+    @property
+    def admin_emails(self) -> set[str]:
+        return {email.strip().lower() for email in self.admin_emails_raw.split(",") if email.strip()}
 
 
 @lru_cache(maxsize=1)
