@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 
+import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConceptBySlug } from '@/lib/api/server'
@@ -17,7 +18,7 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
     <div className="space-y-6">
       <Card className="p-7 md:p-8">
         <div className="mb-4 flex flex-wrap gap-2">
-          <Badge>용어집</Badge>
+          <Badge>핵심 개념</Badge>
           <Badge>{formatStatusLabel(detail.concept.status)}</Badge>
           <Badge>{formatConceptTypeLabel(detail.concept.concept_type)}</Badge>
           {detail.concept.owner_team_hint ? <Badge>{formatOwnerTeamLabel(detail.concept.owner_team_hint)}</Badge> : null}
@@ -27,6 +28,9 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
           <div>정규화 용어 {detail.concept.normalized_term}</div>
           <div>근거 문서 {detail.concept.support_doc_count}개</div>
           <div>신뢰도 {detail.concept.confidence_score.toFixed(2)}</div>
+        </div>
+        <div className="mt-4">
+          <TrustBadges trust={detail.concept.trust} showSourceLink={Boolean(detail.concept.trust.source_url)} />
         </div>
         <div className="mt-4 rounded-2xl bg-neutral-50 px-4 py-3 text-sm leading-7 text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
           별칭: {detail.concept.aliases.length ? detail.concept.aliases.join(', ') : '없음'}
@@ -46,7 +50,7 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
       </Card>
 
       <Card className="p-6">
-        <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">근거 문서</div>
+        <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">이 개념을 뒷받침하는 문서</div>
         <div className="space-y-3">
           {detail.supports.slice(0, 20).map((support) => (
             <div key={support.id} className="rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
@@ -58,6 +62,9 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
               <Link href={`/docs/${support.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
                 {support.document_title}
               </Link>
+              <div className="mt-2">
+                <TrustBadges trust={support.trust} showSourceLink={Boolean(support.trust.source_url)} />
+              </div>
               <div className="mt-2 text-sm leading-7 text-neutral-600 dark:text-neutral-400">{support.support_text}</div>
             </div>
           ))}
@@ -66,7 +73,7 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
 
       {detail.related_concepts.length ? (
         <Card className="p-6">
-          <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">관련 개념</div>
+          <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">함께 보면 좋은 개념</div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {detail.related_concepts.map((concept) => (
               <Link key={concept.id} href={`/glossary/${concept.slug}`} className="rounded-2xl border border-neutral-200 px-4 py-3 transition hover:border-blue-300 dark:border-neutral-800 dark:hover:border-blue-900">
@@ -76,6 +83,9 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
                 </div>
                 <div className="font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
                 <div className="mt-1 text-xs text-neutral-500">신뢰도 {concept.confidence_score.toFixed(2)}</div>
+                <div className="mt-2">
+                  <TrustBadges trust={concept.trust} />
+                </div>
               </Link>
             ))}
           </div>

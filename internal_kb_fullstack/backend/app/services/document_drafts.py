@@ -21,6 +21,7 @@ from app.schemas.documents import (
 from app.schemas.search import SearchHit, SearchRequest
 from app.services.glossary import concept_search_key, get_concept_support_hits, resolve_concept
 from app.services.search import hybrid_search
+from app.services.trust import build_search_hit_trust
 
 SECTION_TITLES = (
     "Definition",
@@ -407,6 +408,7 @@ async def fetch_exact_reference_hits(
             Document.slug.label("document_slug"),
             Document.source_system.label("source_system"),
             Document.source_url.label("source_url"),
+            Document.last_ingested_at.label("last_synced_at"),
             DocumentChunk.section_title.label("section_title"),
             DocumentChunk.heading_path.label("heading_path"),
             DocumentChunk.content_text.label("content_text"),
@@ -414,6 +416,7 @@ async def fetch_exact_reference_hits(
             literal(None).label("vector_score"),
             literal(None).label("keyword_score"),
             Document.meta.label("metadata"),
+            literal(1).label("evidence_count"),
         )
         .join(Document, Document.id == DocumentChunk.document_id)
         .where(*filters)
@@ -435,7 +438,19 @@ async def fetch_exact_reference_hits(
     )
 
     result = await session.execute(query)
-    return [SearchHit(**row) for row in result.mappings().all()]
+    return [
+        SearchHit(
+            **row,
+            trust=build_search_hit_trust(
+                source_system=row["source_system"],
+                source_url=row["source_url"],
+                last_synced_at=row["last_synced_at"],
+                evidence_count=row["evidence_count"],
+                matched_concept=False,
+            ),
+        )
+        for row in result.mappings().all()
+    ]
 
 
 async def gather_definition_reference_candidates(

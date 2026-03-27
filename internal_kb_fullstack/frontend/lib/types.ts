@@ -1,3 +1,12 @@
+export type TrustSummary = {
+  source_label: string
+  source_url?: string | null
+  authority_kind: string
+  last_synced_at?: string | null
+  freshness_state: string
+  evidence_count: number
+}
+
 export type DocumentSummary = {
   id: string
   source_system: string
@@ -14,6 +23,7 @@ export type DocumentSummary = {
   created_at: string
   updated_at: string
   last_ingested_at?: string | null
+  trust: TrustSummary
 }
 
 export type RevisionSummary = {
@@ -107,6 +117,7 @@ export type SearchHit = {
   evidence_strength?: number | null
   support_group_key?: string | null
   metadata: Record<string, unknown>
+  trust: TrustSummary
 }
 
 export type SearchResponse = {
@@ -140,7 +151,7 @@ export type JobSummary = {
   revision_id?: string | null
   target_concept_id?: string | null
   target_document_id?: string | null
-  target_id?: string | null
+  resource_id?: string | null
   connection_id?: string | null
   status: string
   embedding_model?: string | null
@@ -182,6 +193,7 @@ export type GlossaryConceptSummary = {
   metadata: Record<string, unknown>
   refreshed_at: string
   updated_at: string
+  trust: TrustSummary
 }
 
 export type GlossarySupportItem = {
@@ -200,6 +212,7 @@ export type GlossarySupportItem = {
   support_group_key: string
   support_text: string
   metadata: Record<string, unknown>
+  trust: TrustSummary
 }
 
 export type GlossaryConceptDetailResponse = {
@@ -290,6 +303,9 @@ export type UserSummary = {
   roles: string[]
   is_admin: boolean
   last_login_at?: string | null
+  current_workspace?: WorkspaceSummary | null
+  current_workspace_role?: string | null
+  can_manage_workspace_connectors: boolean
 }
 
 export type AuthMeResponse = {
@@ -302,19 +318,147 @@ export type OAuthStartResponse = {
   state: string
 }
 
-export type AuthCallbackResponse = {
+export type AuthSessionResponse = {
   session_token: string
   redirect_to: string
   user: UserSummary
 }
 
-export type ConnectorTargetSummary = {
+export type AuthCallbackResponse = AuthSessionResponse
+
+export type PasswordLoginRequest = {
+  email: string
+  password: string
+  return_to?: string
+  post_auth_action?: string | null
+  owner_scope?: string | null
+  provider?: string | null
+  invite_token?: string | null
+}
+
+export type PasswordInviteSignupRequest = {
+  invite_token: string
+  name: string
+  password: string
+  return_to?: string
+  post_auth_action?: string | null
+  owner_scope?: string | null
+  provider?: string | null
+}
+
+export type PasswordResetLinkCreateRequest = {
+  email: string
+}
+
+export type PasswordResetLinkCreateResponse = {
+  email: string
+  reset_url: string
+  expires_at: string
+}
+
+export type PasswordResetPreviewResponse = {
+  email: string
+  name: string
+  expires_at: string
+  used_at?: string | null
+  is_expired: boolean
+}
+
+export type PasswordResetConsumeRequest = {
+  password: string
+  return_to?: string
+  post_auth_action?: string | null
+  owner_scope?: string | null
+  provider?: string | null
+}
+
+export type WorkspaceSummary = {
+  id: string
+  slug: string
+  name: string
+  is_default: boolean
+}
+
+export type WorkspaceContextResponse = {
+  workspace?: WorkspaceSummary | null
+  role?: string | null
+  can_manage_connectors: boolean
+}
+
+export type WorkspaceSourceHealthSummary = {
+  workspace_connection_count: number
+  healthy_source_count: number
+  needs_attention_count: number
+  providers_needing_attention: string[]
+}
+
+export type WorkspaceOverviewResponse = {
+  authenticated: boolean
+  workspace?: WorkspaceSummary | null
+  viewer_role?: string | null
+  can_manage_connectors: boolean
+  setup_state: string
+  next_actions: string[]
+  source_health: WorkspaceSourceHealthSummary
+  featured_docs: DocumentListItem[]
+  featured_concepts: GlossaryConceptSummary[]
+  recent_sync_issues: JobSummary[]
+}
+
+export type WorkspaceMemberSummary = {
+  user_id: string
+  email: string
+  name: string
+  avatar_url?: string | null
+  role: string
+  created_at: string
+}
+
+export type WorkspaceInvitationSummary = {
+  id: string
+  workspace_id: string
+  invited_email: string
+  role: string
+  expires_at: string
+  accepted_at?: string | null
+  created_at: string
+}
+
+export type WorkspaceInvitationCreateRequest = {
+  invited_email: string
+  role: string
+}
+
+export type WorkspaceInvitationCreateResponse = {
+  invitation: WorkspaceInvitationSummary
+  invite_url: string
+}
+
+export type WorkspaceInvitationAcceptResponse = {
+  workspace: WorkspaceSummary
+  role: string
+}
+
+export type WorkspaceInvitationPreviewResponse = {
+  invited_email: string
+  workspace: WorkspaceSummary
+  role: string
+  expires_at: string
+  accepted_at?: string | null
+  is_expired: boolean
+  local_password_exists: boolean
+}
+
+export type ConnectorResourceSummary = {
   id: string
   connection_id: string
-  target_type: string
+  provider: string
+  resource_kind: string
   external_id: string
   name: string
-  include_subfolders: boolean
+  resource_url?: string | null
+  parent_external_id?: string | null
+  sync_children: boolean
   sync_mode: string
   sync_interval_minutes?: number | null
   status: string
@@ -322,6 +466,7 @@ export type ConnectorTargetSummary = {
   last_sync_completed_at?: string | null
   next_auto_sync_at?: string | null
   last_sync_summary: Record<string, number>
+  provider_metadata: Record<string, unknown>
 }
 
 export type ConnectorConnectionSummary = {
@@ -337,7 +482,7 @@ export type ConnectorConnectionSummary = {
   last_validated_at?: string | null
   created_at: string
   updated_at: string
-  targets: ConnectorTargetSummary[]
+  resources: ConnectorResourceSummary[]
 }
 
 export type ConnectorListResponse = {
@@ -345,32 +490,43 @@ export type ConnectorListResponse = {
 }
 
 export type ConnectorReadinessResponse = {
+  providers: ConnectorProviderReadiness[]
+}
+
+export type ConnectorProviderReadiness = {
+  provider: string
   oauth_configured: boolean
-  organization_connection_exists: boolean
-  organization_connection_status?: string | null
-  viewer_can_manage_org_connection: boolean
+  workspace_connection_exists: boolean
+  workspace_connection_status?: string | null
+  viewer_can_manage_workspace_connection: boolean
+  setup_state: string
+  healthy_source_count: number
+  needs_attention_count: number
+  recommended_templates: string[]
 }
 
 export type ConnectorBrowseItem = {
   id: string
   name: string
-  kind: string
-  mime_type?: string | null
-  drive_id?: string | null
-  parent_id?: string | null
+  resource_kind: string
+  resource_url?: string | null
+  parent_external_id?: string | null
+  has_children: boolean
+  provider_metadata: Record<string, unknown>
 }
 
 export type ConnectorBrowseResponse = {
   items: ConnectorBrowseItem[]
-  kind: string
-  parent_id?: string | null
-  drive_id?: string | null
+  kind?: string | null
+  parent_external_id?: string | null
+  cursor?: string | null
+  has_more: boolean
 }
 
 export type ConnectorSourceItemSummary = {
   id: string
-  target_id: string
-  external_file_id: string
+  resource_id: string
+  external_item_id: string
   mime_type?: string | null
   name: string
   source_url?: string | null
@@ -381,6 +537,26 @@ export type ConnectorSourceItemSummary = {
   error_message?: string | null
   last_seen_at?: string | null
   last_synced_at?: string | null
+  provider_metadata: Record<string, unknown>
+}
+
+export type ConnectorResourceCreateRequest = {
+  resource_kind: string
+  external_id: string
+  name: string
+  resource_url?: string | null
+  parent_external_id?: string | null
+  sync_children?: boolean | null
+  sync_mode?: string | null
+  sync_interval_minutes?: number | null
+  provider_metadata?: Record<string, unknown>
+}
+
+export type ConnectorResourceUpdateRequest = {
+  sync_children?: boolean | null
+  sync_mode?: string | null
+  sync_interval_minutes?: number | null
+  status?: string | null
 }
 
 export type GenerateDefinitionDraftRequest = {

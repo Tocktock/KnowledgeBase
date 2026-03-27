@@ -171,9 +171,9 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
       <Card className="p-6">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">용어집 리뷰 스튜디오</h1>
+            <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">지식 검수</h1>
             <p className="mt-2 text-sm leading-7 text-neutral-500">
-              개념 마이닝 결과를 검토하고, 근거를 확인하고, 초안 생성과 승인 상태를 운영합니다.
+              핵심 개념 후보를 검토하고, 근거 문서를 확인하고, 대표 문서와 승인 상태를 운영합니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

@@ -31,6 +31,7 @@ from app.schemas.glossary import (
     GlossaryDraftRequest,
     GlossarySupportItem,
 )
+from app.services.trust import build_concept_trust, build_document_trust
 
 NOISE_PATTERN = re.compile(
     r"(회의|회고|작업|공유|콘텐츠|에셋|신청|테스트|클론|정리|초안|리뷰|가이드|업무 목록|issue|ticket|retro|meeting)",
@@ -241,6 +242,7 @@ def _document_link(document: Document | None) -> GlossaryConceptDocumentLink | N
 
 
 def _concept_summary(concept: KnowledgeConcept, docs_by_id: dict[UUID, Document]) -> GlossaryConceptSummary:
+    canonical_document = docs_by_id.get(concept.canonical_document_id) if concept.canonical_document_id else None
     return GlossaryConceptSummary(
         id=concept.id,
         slug=concept_slug(concept.display_term),
@@ -256,10 +258,17 @@ def _concept_summary(concept: KnowledgeConcept, docs_by_id: dict[UUID, Document]
         owner_team_hint=concept.owner_team_hint,
         source_system_mix=list(concept.source_system_mix or []),
         generated_document=_document_link(docs_by_id.get(concept.generated_document_id)) if concept.generated_document_id else None,
-        canonical_document=_document_link(docs_by_id.get(concept.canonical_document_id)) if concept.canonical_document_id else None,
+        canonical_document=_document_link(canonical_document) if canonical_document is not None else None,
         metadata=concept.meta or {},
         refreshed_at=concept.refreshed_at,
         updated_at=concept.updated_at,
+        trust=build_concept_trust(
+            status=concept.status,
+            source_systems=list(concept.source_system_mix or []),
+            last_synced_at=concept.refreshed_at,
+            evidence_count=concept.support_doc_count,
+            source_url=canonical_document.source_url if canonical_document is not None else None,
+        ),
     )
 
 
@@ -341,6 +350,7 @@ async def get_glossary_concept_detail(session: AsyncSession, concept_id: UUID) -
         await session.execute(
             select(
                 ConceptSupport,
+                Document,
                 Document.slug,
                 Document.title,
                 Document.status,
@@ -369,8 +379,14 @@ async def get_glossary_concept_detail(session: AsyncSession, concept_id: UUID) -
             support_group_key=support.support_group_key,
             support_text=support.support_text,
             metadata=support.meta or {},
+            trust=build_document_trust(
+                source_system=document.source_system,
+                source_url=document.source_url,
+                last_synced_at=document.last_ingested_at,
+                doc_type=document.doc_type,
+            ),
         )
-        for support, document_slug, document_title, document_status, document_doc_type, owner_team in support_rows
+        for support, document, document_slug, document_title, document_status, document_doc_type, owner_team in support_rows
     ]
     related_stmt = (
         select(KnowledgeConcept)
@@ -513,6 +529,7 @@ async def get_concept_support_hits(
             Document.slug.label("document_slug"),
             Document.source_system,
             Document.source_url,
+            Document.last_ingested_at.label("last_synced_at"),
             Document.meta.label("document_metadata"),
             Document.owner_team,
             DocumentChunk.id.label("chunk_id"),

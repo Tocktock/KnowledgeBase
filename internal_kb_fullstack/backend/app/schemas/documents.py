@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.jobs import JobSummary
+from app.schemas.trust import TrustSummary
 
 
 class IngestDocumentRequest(BaseModel):
@@ -75,6 +76,7 @@ class DocumentSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_ingested_at: datetime | None = None
+    trust: TrustSummary
 
 
 class RevisionSummary(BaseModel):

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import base64
 import csv
 import io
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -14,7 +15,7 @@ from openpyxl import load_workbook
 from PIL import Image
 from pypdf import PdfReader
 from pptx import Presentation
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
@@ -33,15 +34,15 @@ from app.db.models import (
     ConnectorOAuthState,
     ConnectorOwnerScope,
     ConnectorProvider,
+    ConnectorResource,
+    ConnectorResourceKind,
+    ConnectorResourceStatus,
     ConnectorSourceItem,
     ConnectorSourceItemStatus,
     ConnectorStatus,
     ConnectorSyncJob,
     ConnectorSyncJobKind,
     ConnectorSyncMode,
-    ConnectorSyncTarget,
-    ConnectorTargetStatus,
-    ConnectorTargetType,
     Document,
     JobStatus,
 )
@@ -51,11 +52,12 @@ from app.schemas.connectors import (
     ConnectorConnectionSummary,
     ConnectorListResponse,
     ConnectorOAuthCallbackResponse,
+    ConnectorProviderReadiness,
     ConnectorReadinessResponse,
+    ConnectorResourceCreateRequest,
+    ConnectorResourceSummary,
+    ConnectorResourceUpdateRequest,
     ConnectorSourceItemSummary,
-    ConnectorTargetCreateRequest,
-    ConnectorTargetSummary,
-    ConnectorTargetUpdateRequest,
     ConnectorUpdateRequest,
 )
 from app.schemas.documents import IngestDocumentRequest
@@ -67,12 +69,42 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GOOGLE_DRIVE_V3 = "https://www.googleapis.com/drive/v3"
-CONNECTOR_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/drive.readonly"]
+GOOGLE_CONNECTOR_SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/drive.readonly"]
 GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder"
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
 GOOGLE_SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 GOOGLE_SLIDE_MIME = "application/vnd.google-apps.presentation"
 GOOGLE_DRAWING_MIME = "application/vnd.google-apps.drawing"
+
+NOTION_AUTH_URL = "https://api.notion.com/v1/oauth/authorize"
+NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
+NOTION_API_URL = "https://api.notion.com/v1"
+NOTION_VERSION = "2022-06-28"
+
+SYNC_INTERVALS = {15, 60, 360, 1440}
+PROVIDER_PATH_TO_VALUE = {
+    "google-drive": ConnectorProvider.google_drive.value,
+    "google_drive": ConnectorProvider.google_drive.value,
+    "notion": ConnectorProvider.notion.value,
+}
+PROVIDER_VALUE_TO_PATH = {
+    ConnectorProvider.google_drive.value: "google-drive",
+    ConnectorProvider.notion.value: "notion",
+}
+RESOURCE_KINDS_BY_PROVIDER = {
+    ConnectorProvider.google_drive.value: {
+        ConnectorResourceKind.folder.value,
+        ConnectorResourceKind.shared_drive.value,
+    },
+    ConnectorProvider.notion.value: {
+        ConnectorResourceKind.page.value,
+        ConnectorResourceKind.database.value,
+    },
+}
+RECOMMENDED_TEMPLATES_BY_PROVIDER = {
+    ConnectorProvider.google_drive.value: ["shared_drive", "folder"],
+    ConnectorProvider.notion.value: ["page", "database"],
+}
 
 
 class ConnectorError(RuntimeError):
@@ -94,6 +126,31 @@ class ExtractedContent:
     doc_type: str
 
 
+@dataclass(slots=True)
+class PreparedSyncItem:
+    external_item_id: str
+    title: str
+    source_url: str | None
+    source_revision_id: str | None
+    mime_type: str | None
+    content_type: str | None
+    content: str | None
+    doc_type: str
+    unsupported_reason: str | None = None
+    provider_metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ProviderOAuthResult:
+    account_subject: str
+    display_name: str
+    account_email: str | None
+    encrypted_access_token: str
+    encrypted_refresh_token: str | None
+    token_expires_at: Any
+    granted_scopes: list[str]
+
+
 def _app_callback_path(path: str) -> str:
     settings = get_settings()
     return f"{settings.app_public_url.rstrip('/')}{path}"
@@ -105,33 +162,96 @@ def _safe_return_path(value: str | None) -> str:
     return value
 
 
+def _normalize_provider(value: str) -> str:
+    provider = PROVIDER_PATH_TO_VALUE.get(value)
+    if provider is None:
+        raise ConnectorError("Unsupported connector provider.")
+    return provider
+
+
+def _provider_path(provider: str) -> str:
+    return PROVIDER_VALUE_TO_PATH.get(provider, provider)
+
+
 def _validate_owner_scope(scope: str) -> str:
-    if scope not in {ConnectorOwnerScope.shared.value, ConnectorOwnerScope.user.value}:
+    normalized = scope.strip().lower()
+    if normalized == "shared":
+        normalized = ConnectorOwnerScope.workspace.value
+    elif normalized == "user":
+        normalized = ConnectorOwnerScope.personal.value
+    if normalized not in {ConnectorOwnerScope.workspace.value, ConnectorOwnerScope.personal.value}:
         raise ConnectorError("Unsupported owner scope.")
-    return scope
+    return normalized
 
 
-def _validate_target_type(value: str) -> str:
-    if value not in {ConnectorTargetType.folder.value, ConnectorTargetType.shared_drive.value}:
-        raise ConnectorError("Unsupported connector target type.")
+def _validate_resource_kind(provider: str, value: str | None) -> str:
+    if not value:
+        return (
+            ConnectorResourceKind.folder.value
+            if provider == ConnectorProvider.google_drive.value
+            else ConnectorResourceKind.page.value
+        )
+    if value not in RESOURCE_KINDS_BY_PROVIDER[provider]:
+        raise ConnectorError("Unsupported connector resource kind.")
     return value
 
 
-def _validate_browse_kind(value: str) -> str:
-    if value not in {ConnectorTargetType.folder.value, ConnectorTargetType.shared_drive.value}:
-        raise ConnectorError("Unsupported browse kind.")
-    return value
+def _validate_browse_kind(provider: str, value: str | None) -> str:
+    return _validate_resource_kind(provider, value)
 
 
-def _revision_token(file_meta: dict[str, Any]) -> str:
+def _normalize_sync_schedule(sync_mode: str, interval: int | None) -> tuple[str, int | None]:
+    if sync_mode not in {ConnectorSyncMode.manual.value, ConnectorSyncMode.auto.value}:
+        raise ConnectorError("Unsupported sync mode.")
+    if sync_mode == ConnectorSyncMode.auto.value:
+        normalized_interval = interval if interval in SYNC_INTERVALS else 60
+        return sync_mode, normalized_interval
+    return ConnectorSyncMode.manual.value, None
+
+
+def _default_sync_schedule_for_scope(owner_scope: str) -> tuple[str, int | None]:
+    if owner_scope == ConnectorOwnerScope.workspace.value:
+        return ConnectorSyncMode.auto.value, 60
+    return ConnectorSyncMode.manual.value, None
+
+
+def _resource_sync_defaults(connection: ConnectorConnection, payload: ConnectorResourceCreateRequest) -> tuple[bool, str, int | None]:
+    provider = connection.provider
+    kind = _validate_resource_kind(provider, payload.resource_kind)
+    default_sync_mode, default_interval = _default_sync_schedule_for_scope(connection.owner_scope)
+    sync_mode, interval = _normalize_sync_schedule(
+        payload.sync_mode or default_sync_mode,
+        payload.sync_interval_minutes if payload.sync_interval_minutes is not None else default_interval,
+    )
+    if provider == ConnectorProvider.google_drive.value:
+        sync_children = True if payload.sync_children is None else payload.sync_children
+        return sync_children, sync_mode, interval
+    if kind == ConnectorResourceKind.database.value:
+        return True, sync_mode, interval
+    return False, sync_mode, interval
+
+
+def _resource_sync_children_for_update(resource: ConnectorResource, requested: bool | None) -> bool:
+    if resource.provider == ConnectorProvider.google_drive.value:
+        return resource.sync_children if requested is None else requested
+    if resource.resource_kind == ConnectorResourceKind.database.value:
+        return True
+    return False
+
+
+def _stable_document_slug(title: str, external_id: str) -> str:
+    return f"{slugify(title)}-{external_id[:10].lower()}"
+
+
+def _google_revision_token(file_meta: dict[str, Any]) -> str:
     version = str(file_meta.get("version") or "")
     modified = str(file_meta.get("modifiedTime") or "")
     checksum = str(file_meta.get("md5Checksum") or "")
     return f"{version}:{modified}:{checksum}"
 
 
-def _stable_document_slug(title: str, external_id: str) -> str:
-    return f"{slugify(title)}-{external_id[:10].lower()}"
+def _notion_revision_token(page: dict[str, Any]) -> str:
+    return str(page.get("last_edited_time") or "")
 
 
 def _google_drive_configured() -> bool:
@@ -139,36 +259,25 @@ def _google_drive_configured() -> bool:
     return bool(settings.google_oauth_client_id and settings.google_oauth_client_secret)
 
 
-def _ensure_google_drive_configured() -> None:
-    if not _google_drive_configured():
-        raise ConnectorError("Google Drive OAuth is not configured.")
+def _notion_configured() -> bool:
+    settings = get_settings()
+    return bool(settings.notion_oauth_client_id and settings.notion_oauth_client_secret)
 
 
-def _target_summary(target: ConnectorSyncTarget) -> ConnectorTargetSummary:
-    return ConnectorTargetSummary(
-        id=target.id,
-        connection_id=target.connection_id,
-        target_type=target.target_type,
-        external_id=target.external_id,
-        name=target.name,
-        include_subfolders=target.include_subfolders,
-        sync_mode=target.sync_mode,
-        sync_interval_minutes=target.sync_interval_minutes,
-        status=target.status,
-        last_sync_started_at=target.last_sync_started_at,
-        last_sync_completed_at=target.last_sync_completed_at,
-        next_auto_sync_at=target.next_auto_sync_at,
-        last_sync_summary=dict(target.last_sync_summary or {}),
-    )
+def _provider_configured(provider: str) -> bool:
+    if provider == ConnectorProvider.google_drive.value:
+        return _google_drive_configured()
+    if provider == ConnectorProvider.notion.value:
+        return _notion_configured()
+    return False
 
 
-def _default_sync_schedule_for_scope(owner_scope: str) -> tuple[str, int | None]:
-    if owner_scope == ConnectorOwnerScope.shared.value:
-        return ConnectorSyncMode.auto.value, 60
-    return ConnectorSyncMode.manual.value, None
+def _ensure_provider_configured(provider: str) -> None:
+    if not _provider_configured(provider):
+        raise ConnectorError(f"{provider} OAuth is not configured.")
 
 
-def _connection_summary(connection: ConnectorConnection, targets: list[ConnectorSyncTarget]) -> ConnectorConnectionSummary:
+def _connection_summary(connection: ConnectorConnection, resources: list[ConnectorResource]) -> ConnectorConnectionSummary:
     return ConnectorConnectionSummary(
         id=connection.id,
         provider=connection.provider,
@@ -182,15 +291,37 @@ def _connection_summary(connection: ConnectorConnection, targets: list[Connector
         last_validated_at=connection.last_validated_at,
         created_at=connection.created_at,
         updated_at=connection.updated_at,
-        targets=[_target_summary(target) for target in targets],
+        resources=[_resource_summary(resource) for resource in resources],
+    )
+
+
+def _resource_summary(resource: ConnectorResource) -> ConnectorResourceSummary:
+    return ConnectorResourceSummary(
+        id=resource.id,
+        connection_id=resource.connection_id,
+        provider=resource.provider,
+        resource_kind=resource.resource_kind,
+        external_id=resource.external_id,
+        name=resource.name,
+        resource_url=resource.resource_url,
+        parent_external_id=resource.parent_external_id,
+        sync_children=resource.sync_children,
+        sync_mode=resource.sync_mode,
+        sync_interval_minutes=resource.sync_interval_minutes,
+        status=resource.status,
+        last_sync_started_at=resource.last_sync_started_at,
+        last_sync_completed_at=resource.last_sync_completed_at,
+        next_auto_sync_at=resource.next_auto_sync_at,
+        last_sync_summary=dict(resource.last_sync_summary or {}),
+        provider_metadata=dict(resource.provider_metadata or {}),
     )
 
 
 def _source_item_summary(item: ConnectorSourceItem) -> ConnectorSourceItemSummary:
     return ConnectorSourceItemSummary(
         id=item.id,
-        target_id=item.target_id,
-        external_file_id=item.external_file_id,
+        resource_id=item.resource_id,
+        external_item_id=item.external_item_id,
         mime_type=item.mime_type,
         name=item.name,
         source_url=item.source_url,
@@ -201,11 +332,42 @@ def _source_item_summary(item: ConnectorSourceItem) -> ConnectorSourceItemSummar
         error_message=item.error_message,
         last_seen_at=item.last_seen_at,
         last_synced_at=item.last_synced_at,
+        provider_metadata=dict(item.provider_metadata or {}),
+    )
+
+
+def _provider_readiness_summary(
+    provider: str,
+    *,
+    connection: ConnectorConnection | None,
+    auth_user: AuthenticatedUser | None,
+    healthy_source_count: int = 0,
+    needs_attention_count: int = 0,
+) -> ConnectorProviderReadiness:
+    oauth_configured = _provider_configured(provider)
+    if not oauth_configured:
+        setup_state = "not_configured"
+    elif connection is None:
+        setup_state = "setup_needed"
+    elif needs_attention_count > 0 or connection.status != ConnectorStatus.active.value:
+        setup_state = "attention_required"
+    else:
+        setup_state = "ready"
+    return ConnectorProviderReadiness(
+        provider=provider,
+        oauth_configured=oauth_configured,
+        workspace_connection_exists=connection is not None,
+        workspace_connection_status=connection.status if connection is not None else None,
+        viewer_can_manage_workspace_connection=bool(auth_user and auth_user.can_manage_workspace_connectors),
+        setup_state=setup_state,
+        healthy_source_count=healthy_source_count,
+        needs_attention_count=needs_attention_count,
+        recommended_templates=list(RECOMMENDED_TEMPLATES_BY_PROVIDER.get(provider, [])),
     )
 
 
 async def _exchange_google_code(*, code: str, code_verifier: str, redirect_uri: str) -> dict[str, Any]:
-    _ensure_google_drive_configured()
+    _ensure_provider_configured(ConnectorProvider.google_drive.value)
     settings = get_settings()
     payload = {
         "client_id": settings.google_oauth_client_id,
@@ -223,7 +385,7 @@ async def _exchange_google_code(*, code: str, code_verifier: str, redirect_uri: 
 
 
 async def _refresh_google_token(refresh_token: str) -> dict[str, Any]:
-    _ensure_google_drive_configured()
+    _ensure_provider_configured(ConnectorProvider.google_drive.value)
     settings = get_settings()
     payload = {
         "client_id": settings.google_oauth_client_id,
@@ -249,11 +411,39 @@ async def _google_userinfo(access_token: str) -> dict[str, Any]:
     return response.json()
 
 
+async def _exchange_notion_code(*, code: str, redirect_uri: str) -> dict[str, Any]:
+    _ensure_provider_configured(ConnectorProvider.notion.value)
+    settings = get_settings()
+    basic = base64.b64encode(f"{settings.notion_oauth_client_id}:{settings.notion_oauth_client_secret}".encode("utf-8")).decode("utf-8")
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            NOTION_TOKEN_URL,
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+        )
+    if response.status_code >= 400:
+        raise ConnectorError(f"Notion token exchange failed: {response.text}")
+    return response.json()
+
+
 async def _active_access_token(session: AsyncSession, connection: ConnectorConnection) -> str:
     access_token = decrypt_secret(connection.encrypted_access_token)
+    if not access_token:
+        connection.status = ConnectorStatus.needs_reauth.value
+        await session.commit()
+        raise ConnectorError("Connector access token is unavailable.")
+    if connection.provider == ConnectorProvider.notion.value:
+        return access_token
     refresh_token = decrypt_secret(connection.encrypted_refresh_token)
     expires_at = connection.token_expires_at
-    if access_token and expires_at and expires_at > future_utc(seconds=60):
+    if expires_at and expires_at > future_utc(seconds=60):
         return access_token
     if not refresh_token:
         connection.status = ConnectorStatus.needs_reauth.value
@@ -309,64 +499,190 @@ async def _google_bytes(
     return response.content
 
 
-async def _get_connection_or_raise(
+async def _notion_request(
     session: AsyncSession,
-    connection_id: UUID,
-    auth_user: AuthenticatedUser,
+    connection: ConnectorConnection,
+    method: str,
+    path: str,
     *,
-    allow_shared_read: bool = True,
-) -> ConnectorConnection:
-    connection = await session.get(ConnectorConnection, connection_id)
-    if connection is None:
-        raise ConnectorNotFoundError("Connector not found.")
-    if connection.owner_scope == ConnectorOwnerScope.shared.value:
-        if not allow_shared_read:
-            raise ConnectorForbiddenError("Shared connector access is not allowed.")
-        return connection
-    if connection.owner_user_id != auth_user.user.id:
-        raise ConnectorForbiddenError("User connector access denied.")
-    return connection
-
-
-def _ensure_scope_permission(scope: str, auth_user: AuthenticatedUser) -> None:
-    _validate_owner_scope(scope)
-    if scope == ConnectorOwnerScope.shared.value and not auth_user.is_admin:
-        raise ConnectorForbiddenError("Shared connectors can only be managed by admins.")
-
-
-async def start_google_drive_oauth(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    *,
-    owner_scope: str,
-    return_path: str = "/connectors",
-) -> dict[str, str]:
-    _ensure_google_drive_configured()
-    owner_scope = _validate_owner_scope(owner_scope)
-    _ensure_scope_permission(owner_scope, auth_user)
-    verifier = generate_code_verifier()
-    state = generate_state_token()
-    session.add(
-        ConnectorOAuthState(
-            state=state,
-            purpose=ConnectorOAuthPurpose.connect_drive.value,
-            owner_scope=owner_scope,
-            owner_user_id=auth_user.user.id if owner_scope == ConnectorOwnerScope.user.value else None,
-            code_verifier=verifier,
-            return_path=_safe_return_path(return_path),
-            expires_at=future_utc(seconds=get_settings().oauth_state_ttl_seconds),
+    params: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    token = await _active_access_token(session, connection)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": NOTION_VERSION,
+    }
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.request(
+            method,
+            f"{NOTION_API_URL}{path}",
+            params=params,
+            json=payload,
+            headers=headers,
         )
-    )
-    await session.commit()
+    if response.status_code >= 400:
+        if response.status_code in {401, 403}:
+            connection.status = ConnectorStatus.needs_reauth.value
+            await session.commit()
+        raise ConnectorError(f"Notion request failed: {response.text}")
+    return response.json()
 
+
+def _notion_rich_text(rich_text: list[dict[str, Any]] | None) -> str:
+    parts: list[str] = []
+    for item in rich_text or []:
+        plain = str(item.get("plain_text") or "")
+        href = item.get("href")
+        if href and plain:
+            parts.append(f"[{plain}]({href})")
+        else:
+            parts.append(plain)
+    return "".join(parts).strip()
+
+
+def _notion_title_from_page(page: dict[str, Any]) -> str:
+    for value in (page.get("properties") or {}).values():
+        if isinstance(value, dict) and value.get("type") == "title":
+            title = _notion_rich_text(value.get("title"))
+            if title:
+                return title
+    return "Untitled"
+
+
+def _notion_title_from_database(database: dict[str, Any]) -> str:
+    return _notion_rich_text(database.get("title")) or "Untitled database"
+
+
+async def _notion_block_children(session: AsyncSession, connection: ConnectorConnection, block_id: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        params: dict[str, Any] = {"page_size": 100}
+        if cursor:
+            params["start_cursor"] = cursor
+        payload = await _notion_request(session, connection, "GET", f"/blocks/{block_id}/children", params=params)
+        results.extend(list(payload.get("results", [])))
+        if not payload.get("has_more"):
+            break
+        cursor = payload.get("next_cursor")
+        if not cursor:
+            break
+    return results
+
+
+async def _notion_block_to_markdown(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    block: dict[str, Any],
+    *,
+    depth: int = 0,
+) -> str:
+    block_type = str(block.get("type") or "")
+    payload = block.get(block_type) or {}
+    text = _notion_rich_text(payload.get("rich_text")) if isinstance(payload, dict) else ""
+    prefix = ""
+    if block_type == "heading_1":
+        prefix = "# "
+    elif block_type == "heading_2":
+        prefix = "## "
+    elif block_type == "heading_3":
+        prefix = "### "
+    elif block_type == "bulleted_list_item":
+        prefix = "  " * depth + "- "
+    elif block_type == "numbered_list_item":
+        prefix = "  " * depth + "1. "
+    elif block_type == "to_do":
+        checked = payload.get("checked") is True
+        prefix = "  " * depth + ("- [x] " if checked else "- [ ] ")
+    elif block_type in {"quote", "callout"}:
+        prefix = "> "
+    elif block_type == "code":
+        language = str(payload.get("language") or "")
+        return f"```{language}\n{text}\n```".strip()
+    elif block_type == "divider":
+        return "---"
+    elif block_type == "child_page":
+        return f"## {payload.get('title') or text or 'Child page'}"
+    elif block_type == "bookmark":
+        url = payload.get("url")
+        return f"[북마크]({url})" if url else ""
+    elif block_type in {"image", "file", "pdf", "video"}:
+        file_info = payload.get("external") or payload.get("file") or {}
+        url = file_info.get("url")
+        label = text or block_type
+        return f"[{label}]({url})" if url else label
+    rendered = f"{prefix}{text}".strip()
+    child_markdown = ""
+    if block.get("has_children"):
+        children = await _notion_block_children(session, connection, str(block["id"]))
+        child_parts = [await _notion_block_to_markdown(session, connection, child, depth=depth + 1) for child in children]
+        child_markdown = "\n\n".join(part for part in child_parts if part.strip())
+    if rendered and child_markdown:
+        return f"{rendered}\n\n{child_markdown}".strip()
+    return rendered or child_markdown
+
+
+async def _notion_page_markdown(session: AsyncSession, connection: ConnectorConnection, page: dict[str, Any]) -> str:
+    title = _notion_title_from_page(page)
+    property_lines: list[str] = []
+    for key, value in (page.get("properties") or {}).items():
+        if not isinstance(value, dict):
+            continue
+        value_type = value.get("type")
+        if value_type == "title":
+            continue
+        rendered = ""
+        if value_type == "rich_text":
+            rendered = _notion_rich_text(value.get("rich_text"))
+        elif value_type == "select":
+            selected = value.get("select") or {}
+            rendered = str(selected.get("name") or "")
+        elif value_type == "multi_select":
+            rendered = ", ".join(str(item.get("name") or "") for item in value.get("multi_select") or [])
+        elif value_type == "status":
+            status_item = value.get("status") or {}
+            rendered = str(status_item.get("name") or "")
+        elif value_type == "date":
+            date_item = value.get("date") or {}
+            rendered = str(date_item.get("start") or "")
+        elif value_type == "checkbox":
+            rendered = "true" if value.get("checkbox") else "false"
+        elif value_type == "number":
+            rendered = "" if value.get("number") is None else str(value.get("number"))
+        elif value_type == "url":
+            rendered = str(value.get("url") or "")
+        elif value_type == "email":
+            rendered = str(value.get("email") or "")
+        elif value_type == "phone_number":
+            rendered = str(value.get("phone_number") or "")
+        elif value_type == "people":
+            rendered = ", ".join(str(item.get("name") or item.get("id") or "") for item in value.get("people") or [])
+        if rendered:
+            property_lines.append(f"- {key}: {rendered}")
+
+    blocks = await _notion_block_children(session, connection, str(page["id"]))
+    content_parts = [await _notion_block_to_markdown(session, connection, block) for block in blocks]
+    content = "\n\n".join(part for part in content_parts if part.strip())
+    sections = [f"# {title}"]
+    if property_lines:
+        sections.append("## 속성\n" + "\n".join(property_lines))
+    if content:
+        sections.append(content)
+    return "\n\n".join(section for section in sections if section.strip()).strip()
+
+
+async def _google_oauth_start(session: AsyncSession, *, state: str, code_verifier: str) -> dict[str, str]:
     params = httpx.QueryParams(
         {
             "client_id": get_settings().google_oauth_client_id,
             "redirect_uri": _app_callback_path("/api/connectors/google-drive/oauth/callback"),
             "response_type": "code",
-            "scope": " ".join(CONNECTOR_SCOPES),
+            "scope": " ".join(GOOGLE_CONNECTOR_SCOPES),
             "state": state,
-            "code_challenge": create_code_challenge(verifier),
+            "code_challenge": create_code_challenge(code_verifier),
             "code_challenge_method": "S256",
             "access_type": "offline",
             "prompt": "consent",
@@ -375,488 +691,101 @@ async def start_google_drive_oauth(
     return {"authorization_url": f"{GOOGLE_AUTH_URL}?{params}", "state": state}
 
 
-async def complete_google_drive_oauth(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    *,
-    state: str,
-    code: str,
-) -> ConnectorOAuthCallbackResponse:
-    state_row = (
-        await session.execute(
-            select(ConnectorOAuthState).where(
-                ConnectorOAuthState.state == state,
-                ConnectorOAuthState.purpose == ConnectorOAuthPurpose.connect_drive.value,
-            )
-        )
-    ).scalar_one_or_none()
-    if state_row is None or state_row.expires_at < utcnow():
-        raise ConnectorError("Connector OAuth state is invalid or expired.")
-    if state_row.owner_scope == ConnectorOwnerScope.shared.value and not auth_user.is_admin:
-        raise ConnectorForbiddenError("Shared connector callback requires an admin user.")
-    if state_row.owner_scope == ConnectorOwnerScope.user.value and state_row.owner_user_id != auth_user.user.id:
-        raise ConnectorForbiddenError("Connector callback user does not match the original owner.")
-
+async def _google_oauth_complete(*, code: str, code_verifier: str) -> ProviderOAuthResult:
     token_data = await _exchange_google_code(
         code=code,
-        code_verifier=state_row.code_verifier,
+        code_verifier=code_verifier,
         redirect_uri=_app_callback_path("/api/connectors/google-drive/oauth/callback"),
     )
     userinfo = await _google_userinfo(str(token_data["access_token"]))
-    owner_user_id = auth_user.user.id if state_row.owner_scope == ConnectorOwnerScope.user.value else None
-    existing = (
-        await session.execute(
-            select(ConnectorConnection).where(
-                ConnectorConnection.provider == ConnectorProvider.google_drive.value,
-                ConnectorConnection.owner_scope == state_row.owner_scope,
-                ConnectorConnection.account_subject == str(userinfo["sub"]),
-                ConnectorConnection.owner_user_id == owner_user_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is None:
-        existing = ConnectorConnection(
-            provider=ConnectorProvider.google_drive.value,
-            owner_scope=state_row.owner_scope,
-            owner_user_id=owner_user_id,
-            display_name=f"Google Drive ({userinfo.get('email') or 'account'})",
-            account_email=str(userinfo.get("email") or ""),
-            account_subject=str(userinfo["sub"]),
-            status=ConnectorStatus.active.value,
-            encrypted_access_token=encrypt_secret(str(token_data["access_token"])) or "",
-            encrypted_refresh_token=encrypt_secret(str(token_data.get("refresh_token") or "")),
-            token_expires_at=future_utc(seconds=int(token_data.get("expires_in", 3600))),
-            granted_scopes=list(CONNECTOR_SCOPES),
-            last_validated_at=utcnow(),
-        )
-        session.add(existing)
-        await session.flush()
-    else:
-        existing.display_name = f"Google Drive ({userinfo.get('email') or existing.display_name})"
-        existing.account_email = str(userinfo.get("email") or existing.account_email or "")
-        existing.encrypted_access_token = encrypt_secret(str(token_data["access_token"])) or ""
-        if token_data.get("refresh_token"):
-            existing.encrypted_refresh_token = encrypt_secret(str(token_data["refresh_token"]))
-        existing.token_expires_at = future_utc(seconds=int(token_data.get("expires_in", 3600)))
-        existing.granted_scopes = list(CONNECTOR_SCOPES)
-        existing.status = ConnectorStatus.active.value
-        existing.last_validated_at = utcnow()
-        await session.flush()
-    await session.execute(delete(ConnectorOAuthState).where(ConnectorOAuthState.id == state_row.id))
-    await session.commit()
-
-    targets = list(
-        (
-            await session.execute(
-                select(ConnectorSyncTarget).where(ConnectorSyncTarget.connection_id == existing.id).order_by(ConnectorSyncTarget.created_at.asc())
-            )
-        ).scalars().all()
-    )
-    return ConnectorOAuthCallbackResponse(
-        redirect_to=state_row.return_path or "/connectors",
-        connection=_connection_summary(existing, targets),
+    return ProviderOAuthResult(
+        account_subject=str(userinfo["sub"]),
+        display_name=f"Google Drive ({userinfo.get('email') or 'account'})",
+        account_email=str(userinfo.get("email") or ""),
+        encrypted_access_token=encrypt_secret(str(token_data["access_token"])) or "",
+        encrypted_refresh_token=encrypt_secret(str(token_data.get("refresh_token") or "")),
+        token_expires_at=future_utc(seconds=int(token_data.get("expires_in", 3600))),
+        granted_scopes=list(GOOGLE_CONNECTOR_SCOPES),
     )
 
 
-async def get_connectors_readiness(
+async def _notion_oauth_start(session: AsyncSession, *, state: str, code_verifier: str) -> dict[str, str]:
+    del session, code_verifier
+    params = httpx.QueryParams(
+        {
+            "owner": "user",
+            "client_id": get_settings().notion_oauth_client_id,
+            "redirect_uri": _app_callback_path("/api/connectors/notion/oauth/callback"),
+            "response_type": "code",
+            "state": state,
+        }
+    )
+    return {"authorization_url": f"{NOTION_AUTH_URL}?{params}", "state": state}
+
+
+async def _notion_oauth_complete(*, code: str, code_verifier: str) -> ProviderOAuthResult:
+    del code_verifier
+    token_data = await _exchange_notion_code(
+        code=code,
+        redirect_uri=_app_callback_path("/api/connectors/notion/oauth/callback"),
+    )
+    workspace_name = str(token_data.get("workspace_name") or "workspace")
+    workspace_id = str(token_data.get("workspace_id") or token_data.get("bot_id") or workspace_name)
+    return ProviderOAuthResult(
+        account_subject=workspace_id,
+        display_name=f"Notion ({workspace_name})",
+        account_email=None,
+        encrypted_access_token=encrypt_secret(str(token_data["access_token"])) or "",
+        encrypted_refresh_token=None,
+        token_expires_at=None,
+        granted_scopes=[],
+    )
+
+
+async def _start_oauth_for_provider(session: AsyncSession, *, provider: str, state: str, code_verifier: str) -> dict[str, str]:
+    if provider == ConnectorProvider.google_drive.value:
+        return await _google_oauth_start(session, state=state, code_verifier=code_verifier)
+    if provider == ConnectorProvider.notion.value:
+        return await _notion_oauth_start(session, state=state, code_verifier=code_verifier)
+    raise ConnectorError("Unsupported connector provider.")
+
+
+async def _complete_oauth_for_provider(*, provider: str, code: str, code_verifier: str) -> ProviderOAuthResult:
+    if provider == ConnectorProvider.google_drive.value:
+        return await _google_oauth_complete(code=code, code_verifier=code_verifier)
+    if provider == ConnectorProvider.notion.value:
+        return await _notion_oauth_complete(code=code, code_verifier=code_verifier)
+    raise ConnectorError("Unsupported connector provider.")
+
+
+async def _list_google_drive_files_paginated(
     session: AsyncSession,
-    auth_user: AuthenticatedUser | None,
-) -> ConnectorReadinessResponse:
-    organization_connection = (
-        await session.execute(
-            select(ConnectorConnection)
-            .where(ConnectorConnection.owner_scope == ConnectorOwnerScope.shared.value)
-            .order_by(ConnectorConnection.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return ConnectorReadinessResponse(
-        oauth_configured=_google_drive_configured(),
-        organization_connection_exists=organization_connection is not None,
-        organization_connection_status=organization_connection.status if organization_connection is not None else None,
-        viewer_can_manage_org_connection=bool(auth_user and auth_user.is_admin),
-    )
-
-
-async def list_connections(session: AsyncSession, auth_user: AuthenticatedUser, *, scope: str) -> ConnectorListResponse:
-    scope = _validate_owner_scope(scope)
-    if scope == ConnectorOwnerScope.shared.value:
-        stmt = select(ConnectorConnection).where(ConnectorConnection.owner_scope == ConnectorOwnerScope.shared.value)
-    else:
-        stmt = select(ConnectorConnection).where(
-            ConnectorConnection.owner_scope == ConnectorOwnerScope.user.value,
-            ConnectorConnection.owner_user_id == auth_user.user.id,
-        )
-    connections = list((await session.execute(stmt.order_by(ConnectorConnection.created_at.desc()))).scalars().all())
-    targets = list(
-        (
-            await session.execute(
-                select(ConnectorSyncTarget).where(ConnectorSyncTarget.connection_id.in_([connection.id for connection in connections]))
-            )
-        ).scalars().all()
-    ) if connections else []
-    targets_by_connection: dict[UUID, list[ConnectorSyncTarget]] = {}
-    for target in targets:
-        targets_by_connection.setdefault(target.connection_id, []).append(target)
-    return ConnectorListResponse(items=[_connection_summary(connection, targets_by_connection.get(connection.id, [])) for connection in connections])
-
-
-async def get_connection_detail(session: AsyncSession, auth_user: AuthenticatedUser, connection_id: UUID) -> ConnectorConnectionSummary:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    targets = list(
-        (
-            await session.execute(
-                select(ConnectorSyncTarget).where(ConnectorSyncTarget.connection_id == connection.id).order_by(ConnectorSyncTarget.created_at.asc())
-            )
-        ).scalars().all()
-    )
-    return _connection_summary(connection, targets)
-
-
-async def update_connection(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
-    payload: ConnectorUpdateRequest,
-) -> ConnectorConnectionSummary:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    _ensure_scope_permission(connection.owner_scope, auth_user) if connection.owner_scope == ConnectorOwnerScope.shared.value else None
-    if payload.display_name is not None:
-        connection.display_name = payload.display_name.strip() or connection.display_name
-    if payload.status is not None:
-        connection.status = payload.status
-    await session.commit()
-    return await get_connection_detail(session, auth_user, connection_id)
-
-
-async def delete_connection(session: AsyncSession, auth_user: AuthenticatedUser, connection_id: UUID) -> None:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    if connection.owner_scope == ConnectorOwnerScope.shared.value:
-        _ensure_scope_permission(connection.owner_scope, auth_user)
-    await session.delete(connection)
-    await session.commit()
-
-
-async def browse_connection(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
+    connection: ConnectorConnection,
     *,
-    kind: str,
-    parent_id: str | None = None,
+    q: str,
     drive_id: str | None = None,
-) -> ConnectorBrowseResponse:
-    kind = _validate_browse_kind(kind)
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    if kind == ConnectorTargetType.shared_drive.value:
-        data = await _google_json(session, connection, "/drives", params={"pageSize": 100})
-        return ConnectorBrowseResponse(
-            kind=kind,
-            items=[
-                ConnectorBrowseItem(
-                    id=str(item["id"]),
-                    name=str(item["name"]),
-                    kind=ConnectorTargetType.shared_drive.value,
-                    drive_id=str(item["id"]),
-                )
-                for item in data.get("drives", [])
-            ],
-        )
-
-    folder_parent = parent_id or "root"
-    query = f"mimeType = '{GOOGLE_FOLDER_MIME}' and trashed = false and '{folder_parent}' in parents"
-    params: dict[str, Any] = {
-        "q": query,
-        "pageSize": 100,
-        "fields": "files(id,name,mimeType,parents,driveId)",
-        "supportsAllDrives": "true",
-        "includeItemsFromAllDrives": "true",
-        "orderBy": "name",
-    }
-    if drive_id:
-        params["corpora"] = "drive"
-        params["driveId"] = drive_id
-    data = await _google_json(session, connection, "/files", params=params)
-    return ConnectorBrowseResponse(
-        kind=kind,
-        parent_id=parent_id,
-        drive_id=drive_id,
-        items=[
-            ConnectorBrowseItem(
-                id=str(item["id"]),
-                name=str(item["name"]),
-                kind=ConnectorTargetType.folder.value,
-                mime_type=item.get("mimeType"),
-                drive_id=item.get("driveId"),
-                parent_id=(item.get("parents") or [None])[0],
-            )
-            for item in data.get("files", [])
-        ],
-    )
-
-
-def _normalize_sync_schedule(sync_mode: str, interval: int | None) -> tuple[str, int | None]:
-    if sync_mode not in {ConnectorSyncMode.manual.value, ConnectorSyncMode.auto.value}:
-        raise ConnectorError("Unsupported sync mode.")
-    if sync_mode == ConnectorSyncMode.auto.value:
-        interval = interval if interval in {15, 60, 360, 1440} else 60
-        return sync_mode, interval
-    return ConnectorSyncMode.manual.value, None
-
-
-async def create_target(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
-    payload: ConnectorTargetCreateRequest,
-) -> ConnectorTargetSummary:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    if connection.owner_scope == ConnectorOwnerScope.shared.value:
-        _ensure_scope_permission(connection.owner_scope, auth_user)
-    target_type = _validate_target_type(payload.target_type)
-    default_sync_mode, default_interval = _default_sync_schedule_for_scope(connection.owner_scope)
-    sync_mode, interval = _normalize_sync_schedule(
-        payload.sync_mode or default_sync_mode,
-        payload.sync_interval_minutes if payload.sync_interval_minutes is not None else default_interval,
-    )
-    target = ConnectorSyncTarget(
-        connection_id=connection.id,
-        target_type=target_type,
-        external_id=payload.external_id,
-        name=payload.name,
-        include_subfolders=payload.include_subfolders,
-        sync_mode=sync_mode,
-        sync_interval_minutes=interval,
-        status=ConnectorTargetStatus.active.value,
-        next_auto_sync_at=future_utc(seconds=interval * 60) if sync_mode == ConnectorSyncMode.auto.value and interval else None,
-    )
-    session.add(target)
-    await session.commit()
-    await session.refresh(target)
-    return _target_summary(target)
-
-
-async def _get_target_or_raise(session: AsyncSession, target_id: UUID) -> ConnectorSyncTarget:
-    target = await session.get(ConnectorSyncTarget, target_id)
-    if target is None:
-        raise ConnectorNotFoundError("Connector target not found.")
-    return target
-
-
-async def update_target(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
-    target_id: UUID,
-    payload: ConnectorTargetUpdateRequest,
-) -> ConnectorTargetSummary:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    if connection.owner_scope == ConnectorOwnerScope.shared.value:
-        _ensure_scope_permission(connection.owner_scope, auth_user)
-    target = await _get_target_or_raise(session, target_id)
-    if target.connection_id != connection.id:
-        raise ConnectorNotFoundError("Connector target does not belong to the connection.")
-    if payload.include_subfolders is not None:
-        target.include_subfolders = payload.include_subfolders
-    if payload.status is not None:
-        target.status = payload.status
-    if payload.sync_mode is not None or payload.sync_interval_minutes is not None:
-        sync_mode, interval = _normalize_sync_schedule(payload.sync_mode or target.sync_mode, payload.sync_interval_minutes if payload.sync_interval_minutes is not None else target.sync_interval_minutes)
-        target.sync_mode = sync_mode
-        target.sync_interval_minutes = interval
-        target.next_auto_sync_at = future_utc(seconds=interval * 60) if sync_mode == ConnectorSyncMode.auto.value and interval else None
-    await session.commit()
-    await session.refresh(target)
-    return _target_summary(target)
-
-
-async def delete_target(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
-    target_id: UUID,
-) -> None:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    if connection.owner_scope == ConnectorOwnerScope.shared.value:
-        _ensure_scope_permission(connection.owner_scope, auth_user)
-    target = await _get_target_or_raise(session, target_id)
-    if target.connection_id != connection.id:
-        raise ConnectorNotFoundError("Connector target does not belong to the connection.")
-    await session.delete(target)
-    await session.commit()
-
-
-async def list_source_items(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
-) -> list[ConnectorSourceItemSummary]:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    items = list(
-        (
-            await session.execute(
-                select(ConnectorSourceItem)
-                .where(ConnectorSourceItem.connection_id == connection.id)
-                .order_by(ConnectorSourceItem.updated_at.desc())
-                .limit(200)
-            )
-        ).scalars().all()
-    )
-    return [_source_item_summary(item) for item in items]
-
-
-async def enqueue_connector_sync_job(
-    session: AsyncSession,
-    connection_id: UUID,
-    target_id: UUID,
-    *,
-    sync_mode: str,
-    priority: int,
-) -> ConnectorSyncJob:
-    existing = (
-        await session.execute(
-            select(ConnectorSyncJob).where(
-                ConnectorSyncJob.target_id == target_id,
-                ConnectorSyncJob.status.in_([JobStatus.queued.value, JobStatus.processing.value]),
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-    job = ConnectorSyncJob(
-        connection_id=connection_id,
-        target_id=target_id,
-        sync_mode=sync_mode,
-        status=JobStatus.queued.value,
-        priority=priority,
-        payload={},
-    )
-    session.add(job)
-    await session.flush()
-    return job
-
-
-async def request_target_sync(
-    session: AsyncSession,
-    auth_user: AuthenticatedUser,
-    connection_id: UUID,
-    target_id: UUID,
-) -> JobSummary:
-    connection = await _get_connection_or_raise(session, connection_id, auth_user)
-    if connection.owner_scope == ConnectorOwnerScope.shared.value:
-        _ensure_scope_permission(connection.owner_scope, auth_user)
-    target = await _get_target_or_raise(session, target_id)
-    if target.connection_id != connection.id:
-        raise ConnectorNotFoundError("Connector target does not belong to the connection.")
-    job = await enqueue_connector_sync_job(
-        session,
-        connection.id,
-        target.id,
-        sync_mode=ConnectorSyncMode.manual.value,
-        priority=80,
-    )
-    await session.commit()
-    await session.refresh(job)
-    return JobSummary(
-        id=job.id,
-        kind=ConnectorSyncJobKind.sync.value,
-        title=f"Drive 동기화: {target.name}",
-        status=job.status,
-        priority=job.priority,
-        attempt_count=job.attempt_count,
-        error_message=job.error_message,
-        requested_at=job.requested_at,
-        started_at=job.started_at,
-        finished_at=job.finished_at,
-    )
-
-
-async def enqueue_due_sync_jobs(session: AsyncSession, *, limit: int = 10) -> int:
-    due_targets = list(
-        (
-            await session.execute(
-                select(ConnectorSyncTarget)
-                .where(
-                    ConnectorSyncTarget.sync_mode == ConnectorSyncMode.auto.value,
-                    ConnectorSyncTarget.status == ConnectorTargetStatus.active.value,
-                    ConnectorSyncTarget.next_auto_sync_at.is_not(None),
-                    ConnectorSyncTarget.next_auto_sync_at <= utcnow(),
-                )
-                .order_by(ConnectorSyncTarget.next_auto_sync_at.asc())
-                .limit(limit)
-            )
-        ).scalars().all()
-    )
-    created = 0
-    for target in due_targets:
-        existing = (
-            await session.execute(
-                select(ConnectorSyncJob).where(
-                    ConnectorSyncJob.target_id == target.id,
-                    ConnectorSyncJob.status.in_([JobStatus.queued.value, JobStatus.processing.value]),
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            continue
-        await enqueue_connector_sync_job(
-            session,
-            target.connection_id,
-            target.id,
-            sync_mode=ConnectorSyncMode.auto.value,
-            priority=95,
-        )
-        created += 1
-    if created:
-        await session.commit()
-    return created
-
-
-async def acquire_next_connector_sync_job(session: AsyncSession) -> ConnectorSyncJob | None:
-    job = (
-        await session.execute(
-            select(ConnectorSyncJob)
-            .where(
-                ConnectorSyncJob.status.in_([JobStatus.queued.value, JobStatus.failed.value]),
-            )
-            .where(ConnectorSyncJob.attempt_count < get_settings().worker_max_attempts)
-            .order_by(ConnectorSyncJob.priority.asc(), ConnectorSyncJob.requested_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if job is None:
-        return None
-    job.status = JobStatus.processing.value
-    job.started_at = utcnow()
-    job.finished_at = None
-    job.last_heartbeat_at = utcnow()
-    job.attempt_count += 1
-    job.error_message = None
-    await session.flush()
-    return job
-
-
-async def mark_connector_job_failed(session: AsyncSession, job_id: UUID, message: str) -> None:
-    job = await session.get(ConnectorSyncJob, job_id)
-    if job is None:
-        return
-    job.status = JobStatus.failed.value
-    job.error_message = message[:4000]
-    job.finished_at = utcnow()
-    job.last_heartbeat_at = utcnow()
-    await session.flush()
-
-
-async def mark_connector_job_completed(session: AsyncSession, job_id: UUID, payload: dict[str, Any]) -> None:
-    job = await session.get(ConnectorSyncJob, job_id)
-    if job is None:
-        return
-    job.status = JobStatus.completed.value
-    job.error_message = None
-    job.finished_at = utcnow()
-    job.last_heartbeat_at = utcnow()
-    job.payload = payload
-    await session.flush()
+) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    page_token: str | None = None
+    while True:
+        params: dict[str, Any] = {
+            "q": q,
+            "pageSize": 1000,
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,version,md5Checksum,webViewLink,fileExtension,parents,trashed,driveId)",
+            "supportsAllDrives": "true",
+            "includeItemsFromAllDrives": "true",
+        }
+        if drive_id:
+            params["corpora"] = "drive"
+            params["driveId"] = drive_id
+        if page_token:
+            params["pageToken"] = page_token
+        data = await _google_json(session, connection, "/files", params=params)
+        files.extend(list(data.get("files", [])))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return files
 
 
 def _markdown_table(rows: list[list[Any]]) -> str:
@@ -880,10 +809,7 @@ def _extract_xlsx(data: bytes) -> ExtractedContent:
     for sheet in workbook.worksheets:
         parts.append(f"## {sheet.title}")
         rows = [[cell for cell in row] for row in sheet.iter_rows(values_only=True)]
-        if rows:
-            parts.append(_markdown_table(rows))
-        else:
-            parts.append("_빈 시트_")
+        parts.append(_markdown_table(rows) if rows else "_빈 시트_")
     return ExtractedContent(content_type="markdown", content="\n\n".join(parts).strip(), doc_type="data")
 
 
@@ -932,7 +858,8 @@ def extract_file_content(file_meta: dict[str, Any], data: bytes) -> ExtractedCon
         return ExtractedContent(content_type="html", content=data.decode("utf-8", errors="ignore"), doc_type="knowledge")
     if mime_type in {"text/plain", "text/markdown"} or lower_name.endswith((".txt", ".md", ".markdown")):
         doc_type = "data" if lower_name.endswith(".csv") else "knowledge"
-        return ExtractedContent(content_type="markdown" if lower_name.endswith((".md", ".markdown")) else "text", content=data.decode("utf-8-sig", errors="ignore"), doc_type=doc_type)
+        content_type = "markdown" if lower_name.endswith((".md", ".markdown")) else "text"
+        return ExtractedContent(content_type=content_type, content=data.decode("utf-8-sig", errors="ignore"), doc_type=doc_type)
     if mime_type == "text/csv" or lower_name.endswith(".csv"):
         return _extract_csv(data)
     if mime_type == "application/pdf" or lower_name.endswith(".pdf"):
@@ -967,121 +894,892 @@ async def _download_google_file(session: AsyncSession, connection: ConnectorConn
     return extract_file_content(file_meta, data)
 
 
-async def _list_drive_files_paginated(
+async def _google_browse(
     session: AsyncSession,
     connection: ConnectorConnection,
     *,
-    q: str,
-    drive_id: str | None = None,
-) -> list[dict[str, Any]]:
-    files: list[dict[str, Any]] = []
-    page_token: str | None = None
-    while True:
-        params: dict[str, Any] = {
-            "q": q,
-            "pageSize": 1000,
-            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,version,md5Checksum,webViewLink,fileExtension,parents,trashed,driveId)",
-            "supportsAllDrives": "true",
-            "includeItemsFromAllDrives": "true",
-        }
-        if drive_id:
-            params["corpora"] = "drive"
-            params["driveId"] = drive_id
-        if page_token:
-            params["pageToken"] = page_token
-        data = await _google_json(session, connection, "/files", params=params)
-        files.extend(list(data.get("files", [])))
-        page_token = data.get("nextPageToken")
-        if not page_token:
-            break
-    return files
+    kind: str,
+    parent_id: str | None,
+    container_id: str | None,
+) -> ConnectorBrowseResponse:
+    if kind == ConnectorResourceKind.shared_drive.value:
+        data = await _google_json(session, connection, "/drives", params={"pageSize": 100})
+        return ConnectorBrowseResponse(
+            kind=kind,
+            items=[
+                ConnectorBrowseItem(
+                    id=str(item["id"]),
+                    name=str(item["name"]),
+                    resource_kind=ConnectorResourceKind.shared_drive.value,
+                    has_children=True,
+                    provider_metadata={"drive_id": str(item["id"])},
+                )
+                for item in data.get("drives", [])
+            ],
+        )
+
+    folder_parent = parent_id or "root"
+    query = f"mimeType = '{GOOGLE_FOLDER_MIME}' and trashed = false and '{folder_parent}' in parents"
+    params: dict[str, Any] = {
+        "q": query,
+        "pageSize": 100,
+        "fields": "files(id,name,mimeType,parents,driveId,webViewLink)",
+        "supportsAllDrives": "true",
+        "includeItemsFromAllDrives": "true",
+        "orderBy": "name",
+    }
+    if container_id:
+        params["corpora"] = "drive"
+        params["driveId"] = container_id
+    data = await _google_json(session, connection, "/files", params=params)
+    return ConnectorBrowseResponse(
+        kind=kind,
+        parent_external_id=parent_id,
+        items=[
+            ConnectorBrowseItem(
+                id=str(item["id"]),
+                name=str(item["name"]),
+                resource_kind=ConnectorResourceKind.folder.value,
+                resource_url=item.get("webViewLink"),
+                parent_external_id=(item.get("parents") or [None])[0],
+                has_children=True,
+                provider_metadata={"drive_id": item.get("driveId")},
+            )
+            for item in data.get("files", [])
+        ],
+    )
 
 
-async def _discover_target_files(session: AsyncSession, connection: ConnectorConnection, target: ConnectorSyncTarget) -> list[dict[str, Any]]:
-    if target.target_type == ConnectorTargetType.shared_drive.value:
-        return [
+async def _notion_search(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    *,
+    kind: str,
+    query: str | None,
+    cursor: str | None,
+) -> ConnectorBrowseResponse:
+    filter_value = "database" if kind == ConnectorResourceKind.database.value else "page"
+    body: dict[str, Any] = {
+        "page_size": 25,
+        "filter": {
+            "property": "object",
+            "value": filter_value,
+        },
+        "sort": {
+            "direction": "descending",
+            "timestamp": "last_edited_time",
+        },
+    }
+    if query:
+        body["query"] = query
+    if cursor:
+        body["start_cursor"] = cursor
+    payload = await _notion_request(session, connection, "POST", "/search", payload=body)
+    items: list[ConnectorBrowseItem] = []
+    for item in payload.get("results", []):
+        resource_kind = ConnectorResourceKind.database.value if item.get("object") == "database" else ConnectorResourceKind.page.value
+        name = _notion_title_from_database(item) if resource_kind == ConnectorResourceKind.database.value else _notion_title_from_page(item)
+        items.append(
+            ConnectorBrowseItem(
+                id=str(item["id"]),
+                name=name,
+                resource_kind=resource_kind,
+                resource_url=item.get("url"),
+                has_children=resource_kind == ConnectorResourceKind.database.value,
+                provider_metadata={"object": item.get("object")},
+            )
+        )
+    return ConnectorBrowseResponse(
+        kind=kind,
+        cursor=payload.get("next_cursor"),
+        has_more=bool(payload.get("has_more")),
+        items=items,
+    )
+
+
+async def _google_sync_items(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    resource: ConnectorResource,
+) -> list[PreparedSyncItem]:
+    if resource.resource_kind == ConnectorResourceKind.shared_drive.value:
+        files = [
             item
-            for item in await _list_drive_files_paginated(
+            for item in await _list_google_drive_files_paginated(
                 session,
                 connection,
                 q="trashed = false",
-                drive_id=target.external_id,
+                drive_id=resource.external_id,
             )
             if item.get("mimeType") != GOOGLE_FOLDER_MIME
         ]
-
-    queue: deque[str] = deque([target.external_id])
-    seen_folders: set[str] = set()
-    files: list[dict[str, Any]] = []
-    while queue:
-        folder_id = queue.popleft()
-        if folder_id in seen_folders:
-            continue
-        seen_folders.add(folder_id)
-        children = await _list_drive_files_paginated(
-            session,
-            connection,
-            q=f"trashed = false and '{folder_id}' in parents",
-        )
-        for child in children:
-            if child.get("mimeType") == GOOGLE_FOLDER_MIME:
-                if target.include_subfolders:
-                    queue.append(str(child["id"]))
+    else:
+        queue: deque[str] = deque([resource.external_id])
+        seen_folders: set[str] = set()
+        files: list[dict[str, Any]] = []
+        while queue:
+            folder_id = queue.popleft()
+            if folder_id in seen_folders:
                 continue
-            files.append(child)
-    return files
+            seen_folders.add(folder_id)
+            children = await _list_google_drive_files_paginated(
+                session,
+                connection,
+                q=f"trashed = false and '{folder_id}' in parents",
+            )
+            for child in children:
+                if child.get("mimeType") == GOOGLE_FOLDER_MIME:
+                    if resource.sync_children:
+                        queue.append(str(child["id"]))
+                    continue
+                files.append(child)
+
+    prepared: list[PreparedSyncItem] = []
+    for file_meta in files:
+        try:
+            extracted = await _download_google_file(session, connection, file_meta)
+            prepared.append(
+                PreparedSyncItem(
+                    external_item_id=str(file_meta["id"]),
+                    title=str(file_meta.get("name") or file_meta["id"]),
+                    source_url=file_meta.get("webViewLink"),
+                    source_revision_id=_google_revision_token(file_meta),
+                    mime_type=file_meta.get("mimeType"),
+                    content_type=extracted.content_type,
+                    content=extracted.content,
+                    doc_type=extracted.doc_type,
+                    provider_metadata={
+                        "google_mime_type": file_meta.get("mimeType"),
+                        "drive_id": file_meta.get("driveId"),
+                    },
+                )
+            )
+        except ConnectorError as exc:
+            prepared.append(
+                PreparedSyncItem(
+                    external_item_id=str(file_meta["id"]),
+                    title=str(file_meta.get("name") or file_meta["id"]),
+                    source_url=file_meta.get("webViewLink"),
+                    source_revision_id=_google_revision_token(file_meta),
+                    mime_type=file_meta.get("mimeType"),
+                    content_type=None,
+                    content=None,
+                    doc_type="knowledge",
+                    unsupported_reason=str(exc),
+                    provider_metadata={"google_mime_type": file_meta.get("mimeType")},
+                )
+            )
+    return prepared
+
+
+async def _notion_sync_page_item(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    page: dict[str, Any],
+    *,
+    database_id: str | None = None,
+) -> PreparedSyncItem:
+    markdown = await _notion_page_markdown(session, connection, page)
+    return PreparedSyncItem(
+        external_item_id=str(page["id"]),
+        title=_notion_title_from_page(page),
+        source_url=page.get("url"),
+        source_revision_id=_notion_revision_token(page),
+        mime_type="notion/page",
+        content_type="markdown",
+        content=markdown,
+        doc_type="knowledge",
+        provider_metadata={
+            "object": "page",
+            "database_id": database_id,
+        },
+    )
+
+
+async def _notion_sync_items(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    resource: ConnectorResource,
+) -> list[PreparedSyncItem]:
+    if resource.resource_kind == ConnectorResourceKind.page.value:
+        page = await _notion_request(session, connection, "GET", f"/pages/{resource.external_id}")
+        return [await _notion_sync_page_item(session, connection, page)]
+
+    database = await _notion_request(session, connection, "GET", f"/databases/{resource.external_id}")
+    items: list[PreparedSyncItem] = []
+    cursor: str | None = None
+    while True:
+        body: dict[str, Any] = {"page_size": 100}
+        if cursor:
+            body["start_cursor"] = cursor
+        payload = await _notion_request(session, connection, "POST", f"/databases/{resource.external_id}/query", payload=body)
+        for page in payload.get("results", []):
+            items.append(await _notion_sync_page_item(session, connection, page, database_id=str(database["id"])))
+        if not payload.get("has_more"):
+            break
+        cursor = payload.get("next_cursor")
+        if not cursor:
+            break
+    return items
+
+
+async def _browse_for_provider(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    *,
+    kind: str,
+    query: str | None,
+    cursor: str | None,
+    parent_id: str | None,
+    container_id: str | None,
+) -> ConnectorBrowseResponse:
+    if connection.provider == ConnectorProvider.google_drive.value:
+        return await _google_browse(session, connection, kind=kind, parent_id=parent_id, container_id=container_id)
+    if connection.provider == ConnectorProvider.notion.value:
+        return await _notion_search(session, connection, kind=kind, query=query, cursor=cursor)
+    raise ConnectorError("Unsupported connector provider.")
+
+
+async def _sync_items_for_resource(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    resource: ConnectorResource,
+) -> list[PreparedSyncItem]:
+    if connection.provider == ConnectorProvider.google_drive.value:
+        return await _google_sync_items(session, connection, resource)
+    if connection.provider == ConnectorProvider.notion.value:
+        return await _notion_sync_items(session, connection, resource)
+    raise ConnectorError("Unsupported connector provider.")
+
+
+async def _get_connection_or_raise(
+    session: AsyncSession,
+    connection_id: UUID,
+    auth_user: AuthenticatedUser,
+    *,
+    allow_workspace_read: bool = True,
+) -> ConnectorConnection:
+    connection = await session.get(ConnectorConnection, connection_id)
+    if connection is None:
+        raise ConnectorNotFoundError("Connector not found.")
+    if auth_user.current_workspace_id is None or connection.workspace_id != auth_user.current_workspace_id:
+        raise ConnectorForbiddenError("Connector does not belong to the current workspace.")
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        if not allow_workspace_read:
+            raise ConnectorForbiddenError("Workspace connector access is not allowed.")
+        return connection
+    if connection.owner_user_id != auth_user.user.id:
+        raise ConnectorForbiddenError("Personal connector access denied.")
+    return connection
+
+
+async def _get_resource_or_raise(session: AsyncSession, resource_id: UUID) -> ConnectorResource:
+    resource = await session.get(ConnectorResource, resource_id)
+    if resource is None:
+        raise ConnectorNotFoundError("Connector resource not found.")
+    return resource
+
+
+def _ensure_scope_permission(scope: str, auth_user: AuthenticatedUser) -> None:
+    _validate_owner_scope(scope)
+    if scope == ConnectorOwnerScope.workspace.value and not auth_user.can_manage_workspace_connectors:
+        raise ConnectorForbiddenError("Workspace connectors can only be managed by workspace owners or admins.")
+
+
+async def get_connectors_readiness(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser | None,
+) -> ConnectorReadinessResponse:
+    items: list[ConnectorProviderReadiness] = []
+    workspace_id = auth_user.current_workspace_id if auth_user is not None else None
+    for provider in [ConnectorProvider.google_drive.value, ConnectorProvider.notion.value]:
+        workspace_connection: ConnectorConnection | None = None
+        healthy_source_count = 0
+        needs_attention_count = 0
+        if workspace_id is not None:
+            workspace_connection = (
+                await session.execute(
+                    select(ConnectorConnection)
+                    .where(
+                        ConnectorConnection.provider == provider,
+                        ConnectorConnection.workspace_id == workspace_id,
+                        ConnectorConnection.owner_scope == ConnectorOwnerScope.workspace.value,
+                    )
+                    .order_by(ConnectorConnection.created_at.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if workspace_connection is not None:
+                resources = list(
+                    (
+                        await session.execute(
+                            select(ConnectorResource).where(ConnectorResource.connection_id == workspace_connection.id)
+                        )
+                    ).scalars().all()
+                )
+                healthy_source_count = sum(
+                    1
+                    for resource in resources
+                    if resource.status == ConnectorResourceStatus.active.value
+                    and int((resource.last_sync_summary or {}).get("failed", 0)) == 0
+                )
+                needs_attention_count = sum(
+                    1
+                    for resource in resources
+                    if resource.status != ConnectorResourceStatus.active.value
+                    or int((resource.last_sync_summary or {}).get("failed", 0)) > 0
+                )
+        if workspace_connection is not None and workspace_connection.status != ConnectorStatus.active.value:
+            needs_attention_count += 1
+        items.append(
+            _provider_readiness_summary(
+                provider,
+                connection=workspace_connection,
+                auth_user=auth_user,
+                healthy_source_count=healthy_source_count,
+                needs_attention_count=needs_attention_count,
+            )
+        )
+    return ConnectorReadinessResponse(providers=items)
+
+
+async def list_connections(session: AsyncSession, auth_user: AuthenticatedUser, *, scope: str) -> ConnectorListResponse:
+    scope = _validate_owner_scope(scope)
+    if auth_user.current_workspace_id is None:
+        return ConnectorListResponse(items=[])
+    if scope == ConnectorOwnerScope.workspace.value:
+        stmt = select(ConnectorConnection).where(
+            ConnectorConnection.workspace_id == auth_user.current_workspace_id,
+            ConnectorConnection.owner_scope == ConnectorOwnerScope.workspace.value,
+        )
+    else:
+        stmt = select(ConnectorConnection).where(
+            ConnectorConnection.workspace_id == auth_user.current_workspace_id,
+            ConnectorConnection.owner_scope == ConnectorOwnerScope.personal.value,
+            ConnectorConnection.owner_user_id == auth_user.user.id,
+        )
+    connections = list((await session.execute(stmt.order_by(ConnectorConnection.provider.asc(), ConnectorConnection.created_at.asc()))).scalars().all())
+    connection_ids = [connection.id for connection in connections]
+    resources = list(
+        (
+            await session.execute(
+                select(ConnectorResource)
+                .where(ConnectorResource.connection_id.in_(connection_ids))
+                .order_by(ConnectorResource.provider.asc(), ConnectorResource.name.asc())
+            )
+        ).scalars().all()
+    ) if connection_ids else []
+    resources_by_connection: dict[UUID, list[ConnectorResource]] = {}
+    for resource in resources:
+        resources_by_connection.setdefault(resource.connection_id, []).append(resource)
+    return ConnectorListResponse(
+        items=[
+            _connection_summary(connection, resources_by_connection.get(connection.id, []))
+            for connection in connections
+        ]
+    )
+
+
+async def get_connection_detail(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+) -> ConnectorConnectionSummary:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    resources = list(
+        (
+            await session.execute(
+                select(ConnectorResource)
+                .where(ConnectorResource.connection_id == connection.id)
+                .order_by(ConnectorResource.provider.asc(), ConnectorResource.name.asc())
+            )
+        ).scalars().all()
+    )
+    return _connection_summary(connection, resources)
+
+
+async def update_connection(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    payload: ConnectorUpdateRequest,
+) -> ConnectorConnectionSummary:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    if payload.display_name is not None:
+        connection.display_name = payload.display_name.strip() or connection.display_name
+    if payload.status is not None:
+        connection.status = payload.status
+    await session.commit()
+    return await get_connection_detail(session, auth_user, connection_id)
+
+
+async def delete_connection(session: AsyncSession, auth_user: AuthenticatedUser, connection_id: UUID) -> None:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    await session.delete(connection)
+    await session.commit()
+
+
+async def start_provider_oauth(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    *,
+    provider: str,
+    owner_scope: str,
+    return_path: str = "/connectors",
+) -> dict[str, str]:
+    provider = _normalize_provider(provider)
+    _ensure_provider_configured(provider)
+    owner_scope = _validate_owner_scope(owner_scope)
+    _ensure_scope_permission(owner_scope, auth_user)
+    if auth_user.current_workspace_id is None:
+        raise ConnectorForbiddenError("Workspace context is required.")
+    verifier = generate_code_verifier()
+    state = generate_state_token()
+    session.add(
+        ConnectorOAuthState(
+            state=state,
+            purpose=ConnectorOAuthPurpose.connect_provider.value,
+            workspace_id=auth_user.current_workspace_id,
+            owner_scope=owner_scope,
+            owner_user_id=auth_user.user.id if owner_scope == ConnectorOwnerScope.personal.value else None,
+            code_verifier=verifier,
+            return_path=_safe_return_path(return_path),
+            expires_at=future_utc(seconds=get_settings().oauth_state_ttl_seconds),
+        )
+    )
+    await session.commit()
+    return await _start_oauth_for_provider(session, provider=provider, state=state, code_verifier=verifier)
+
+
+async def complete_provider_oauth(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    *,
+    provider: str,
+    state: str,
+    code: str,
+) -> ConnectorOAuthCallbackResponse:
+    provider = _normalize_provider(provider)
+    state_row = (
+        await session.execute(
+            select(ConnectorOAuthState).where(
+                ConnectorOAuthState.state == state,
+                ConnectorOAuthState.purpose == ConnectorOAuthPurpose.connect_provider.value,
+            )
+        )
+    ).scalar_one_or_none()
+    if state_row is None or state_row.expires_at < utcnow():
+        raise ConnectorError("Connector OAuth state is invalid or expired.")
+    if auth_user.current_workspace_id is None or state_row.workspace_id != auth_user.current_workspace_id:
+        raise ConnectorForbiddenError("Connector callback workspace does not match the current workspace.")
+    if state_row.owner_scope == ConnectorOwnerScope.workspace.value and not auth_user.can_manage_workspace_connectors:
+        raise ConnectorForbiddenError("Workspace connector callback requires a workspace owner or admin.")
+    if state_row.owner_scope == ConnectorOwnerScope.personal.value and state_row.owner_user_id != auth_user.user.id:
+        raise ConnectorForbiddenError("Connector callback user does not match the original owner.")
+
+    oauth_result = await _complete_oauth_for_provider(
+        provider=provider,
+        code=code,
+        code_verifier=state_row.code_verifier,
+    )
+    owner_user_id = auth_user.user.id if state_row.owner_scope == ConnectorOwnerScope.personal.value else None
+    existing = (
+        await session.execute(
+            select(ConnectorConnection).where(
+                ConnectorConnection.provider == provider,
+                ConnectorConnection.workspace_id == state_row.workspace_id,
+                ConnectorConnection.owner_scope == state_row.owner_scope,
+                ConnectorConnection.owner_user_id == owner_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        existing = ConnectorConnection(
+            provider=provider,
+            workspace_id=state_row.workspace_id,
+            owner_scope=state_row.owner_scope,
+            owner_user_id=owner_user_id,
+            display_name=oauth_result.display_name,
+            account_email=oauth_result.account_email,
+            account_subject=oauth_result.account_subject,
+            status=ConnectorStatus.active.value,
+            encrypted_access_token=oauth_result.encrypted_access_token,
+            encrypted_refresh_token=oauth_result.encrypted_refresh_token,
+            token_expires_at=oauth_result.token_expires_at,
+            granted_scopes=oauth_result.granted_scopes,
+            last_validated_at=utcnow(),
+        )
+        session.add(existing)
+        await session.flush()
+    else:
+        existing.display_name = oauth_result.display_name
+        existing.account_email = oauth_result.account_email
+        existing.account_subject = oauth_result.account_subject
+        existing.status = ConnectorStatus.active.value
+        existing.encrypted_access_token = oauth_result.encrypted_access_token
+        existing.encrypted_refresh_token = oauth_result.encrypted_refresh_token
+        existing.token_expires_at = oauth_result.token_expires_at
+        existing.granted_scopes = oauth_result.granted_scopes
+        existing.last_validated_at = utcnow()
+        await session.flush()
+    await session.delete(state_row)
+    await session.commit()
+    return ConnectorOAuthCallbackResponse(
+        redirect_to=state_row.return_path or "/connectors",
+        connection=await get_connection_detail(session, auth_user, existing.id),
+    )
+
+
+async def browse_connection(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    *,
+    kind: str | None,
+    query: str | None = None,
+    cursor: str | None = None,
+    parent_id: str | None = None,
+    container_id: str | None = None,
+) -> ConnectorBrowseResponse:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    browse_kind = _validate_browse_kind(connection.provider, kind)
+    return await _browse_for_provider(
+        session,
+        connection,
+        kind=browse_kind,
+        query=query,
+        cursor=cursor,
+        parent_id=parent_id,
+        container_id=container_id,
+    )
+
+
+async def create_resource(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    payload: ConnectorResourceCreateRequest,
+) -> ConnectorResourceSummary:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    resource_kind = _validate_resource_kind(connection.provider, payload.resource_kind)
+    sync_children, sync_mode, interval = _resource_sync_defaults(connection, payload)
+    existing = (
+        await session.execute(
+            select(ConnectorResource).where(
+                ConnectorResource.connection_id == connection.id,
+                ConnectorResource.resource_kind == resource_kind,
+                ConnectorResource.external_id == payload.external_id,
+            )
+        )
+    ).scalar_one_or_none()
+    resource = existing or ConnectorResource(
+        connection_id=connection.id,
+        provider=connection.provider,
+        resource_kind=resource_kind,
+        external_id=payload.external_id,
+        name=payload.name,
+        resource_url=payload.resource_url,
+        parent_external_id=payload.parent_external_id,
+        sync_children=sync_children,
+        sync_mode=sync_mode,
+        sync_interval_minutes=interval,
+        status=ConnectorResourceStatus.active.value,
+        next_auto_sync_at=future_utc(seconds=interval * 60) if sync_mode == ConnectorSyncMode.auto.value and interval else None,
+        provider_metadata=payload.provider_metadata,
+    )
+    if existing is None:
+        session.add(resource)
+    else:
+        resource.name = payload.name
+        resource.resource_url = payload.resource_url
+        resource.parent_external_id = payload.parent_external_id
+        resource.sync_children = sync_children
+        resource.sync_mode = sync_mode
+        resource.sync_interval_minutes = interval
+        resource.next_auto_sync_at = future_utc(seconds=interval * 60) if sync_mode == ConnectorSyncMode.auto.value and interval else None
+        resource.status = ConnectorResourceStatus.active.value
+        resource.provider_metadata = payload.provider_metadata
+    await session.commit()
+    await session.refresh(resource)
+    return _resource_summary(resource)
+
+
+async def update_resource(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    resource_id: UUID,
+    payload: ConnectorResourceUpdateRequest,
+) -> ConnectorResourceSummary:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    resource = await _get_resource_or_raise(session, resource_id)
+    if resource.connection_id != connection.id:
+        raise ConnectorNotFoundError("Connector resource does not belong to the connection.")
+    resource.sync_children = _resource_sync_children_for_update(resource, payload.sync_children)
+    if payload.status is not None:
+        resource.status = payload.status
+    if payload.sync_mode is not None or payload.sync_interval_minutes is not None:
+        sync_mode, interval = _normalize_sync_schedule(
+            payload.sync_mode or resource.sync_mode,
+            payload.sync_interval_minutes if payload.sync_interval_minutes is not None else resource.sync_interval_minutes,
+        )
+        resource.sync_mode = sync_mode
+        resource.sync_interval_minutes = interval
+        resource.next_auto_sync_at = future_utc(seconds=interval * 60) if sync_mode == ConnectorSyncMode.auto.value and interval else None
+    await session.commit()
+    await session.refresh(resource)
+    return _resource_summary(resource)
+
+
+async def delete_resource(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    resource_id: UUID,
+) -> None:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    resource = await _get_resource_or_raise(session, resource_id)
+    if resource.connection_id != connection.id:
+        raise ConnectorNotFoundError("Connector resource does not belong to the connection.")
+    await session.delete(resource)
+    await session.commit()
+
+
+async def list_source_items(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+) -> list[ConnectorSourceItemSummary]:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    items = list(
+        (
+            await session.execute(
+                select(ConnectorSourceItem)
+                .where(ConnectorSourceItem.connection_id == connection.id)
+                .order_by(ConnectorSourceItem.updated_at.desc())
+                .limit(200)
+            )
+        ).scalars().all()
+    )
+    return [_source_item_summary(item) for item in items]
+
+
+async def enqueue_connector_sync_job(
+    session: AsyncSession,
+    connection_id: UUID,
+    resource_id: UUID,
+    *,
+    sync_mode: str,
+    priority: int,
+) -> ConnectorSyncJob:
+    existing = (
+        await session.execute(
+            select(ConnectorSyncJob).where(
+                ConnectorSyncJob.resource_id == resource_id,
+                ConnectorSyncJob.status.in_([JobStatus.queued.value, JobStatus.processing.value]),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    job = ConnectorSyncJob(
+        connection_id=connection_id,
+        resource_id=resource_id,
+        sync_mode=sync_mode,
+        status=JobStatus.queued.value,
+        priority=priority,
+        payload={},
+    )
+    session.add(job)
+    await session.flush()
+    return job
+
+
+async def request_resource_sync(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    resource_id: UUID,
+) -> JobSummary:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    resource = await _get_resource_or_raise(session, resource_id)
+    if resource.connection_id != connection.id:
+        raise ConnectorNotFoundError("Connector resource does not belong to the connection.")
+    job = await enqueue_connector_sync_job(
+        session,
+        connection.id,
+        resource.id,
+        sync_mode=ConnectorSyncMode.manual.value,
+        priority=80,
+    )
+    await session.commit()
+    await session.refresh(job)
+    return JobSummary(
+        id=job.id,
+        kind=ConnectorSyncJobKind.sync.value,
+        title=f"리소스 동기화: {resource.name}",
+        status=job.status,
+        connection_id=job.connection_id,
+        resource_id=job.resource_id,
+        priority=job.priority,
+        attempt_count=job.attempt_count,
+        error_message=job.error_message,
+        requested_at=job.requested_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+    )
+
+
+async def enqueue_due_sync_jobs(session: AsyncSession, *, limit: int = 10) -> int:
+    due_resources = list(
+        (
+            await session.execute(
+                select(ConnectorResource)
+                .where(
+                    ConnectorResource.sync_mode == ConnectorSyncMode.auto.value,
+                    ConnectorResource.status == ConnectorResourceStatus.active.value,
+                    ConnectorResource.next_auto_sync_at.is_not(None),
+                    ConnectorResource.next_auto_sync_at <= utcnow(),
+                )
+                .order_by(ConnectorResource.next_auto_sync_at.asc())
+                .limit(limit)
+            )
+        ).scalars().all()
+    )
+    created = 0
+    for resource in due_resources:
+        existing = (
+            await session.execute(
+                select(ConnectorSyncJob).where(
+                    ConnectorSyncJob.resource_id == resource.id,
+                    ConnectorSyncJob.status.in_([JobStatus.queued.value, JobStatus.processing.value]),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            continue
+        await enqueue_connector_sync_job(
+            session,
+            resource.connection_id,
+            resource.id,
+            sync_mode=ConnectorSyncMode.auto.value,
+            priority=95,
+        )
+        created += 1
+    if created:
+        await session.commit()
+    return created
+
+
+async def acquire_next_connector_sync_job(session: AsyncSession) -> ConnectorSyncJob | None:
+    job = (
+        await session.execute(
+            select(ConnectorSyncJob)
+            .where(ConnectorSyncJob.status.in_([JobStatus.queued.value, JobStatus.failed.value]))
+            .where(ConnectorSyncJob.attempt_count < get_settings().worker_max_attempts)
+            .order_by(ConnectorSyncJob.priority.asc(), ConnectorSyncJob.requested_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if job is None:
+        return None
+    job.status = JobStatus.processing.value
+    job.started_at = utcnow()
+    job.finished_at = None
+    job.last_heartbeat_at = utcnow()
+    job.attempt_count += 1
+    job.error_message = None
+    await session.flush()
+    return job
+
+
+async def mark_connector_job_failed(session: AsyncSession, job_id: UUID, message: str) -> None:
+    job = await session.get(ConnectorSyncJob, job_id)
+    if job is None:
+        return
+    job.status = JobStatus.failed.value
+    job.error_message = message[:4000]
+    job.finished_at = utcnow()
+    job.last_heartbeat_at = utcnow()
+    await session.flush()
+
+
+async def mark_connector_job_completed(session: AsyncSession, job_id: UUID, payload: dict[str, Any]) -> None:
+    job = await session.get(ConnectorSyncJob, job_id)
+    if job is None:
+        return
+    job.status = JobStatus.completed.value
+    job.error_message = None
+    job.finished_at = utcnow()
+    job.last_heartbeat_at = utcnow()
+    job.payload = payload
+    await session.flush()
 
 
 async def _upsert_source_item(
     session: AsyncSession,
     *,
     connection_id: UUID,
-    target_id: UUID,
-    file_meta: dict[str, Any],
+    resource_id: UUID,
+    item: PreparedSyncItem,
     document_id: UUID | None,
     status: str,
     unsupported_reason: str | None = None,
     error_message: str | None = None,
 ) -> ConnectorSourceItem:
-    item = (
+    row = (
         await session.execute(
             select(ConnectorSourceItem).where(
                 ConnectorSourceItem.connection_id == connection_id,
-                ConnectorSourceItem.target_id == target_id,
-                ConnectorSourceItem.external_file_id == str(file_meta["id"]),
+                ConnectorSourceItem.resource_id == resource_id,
+                ConnectorSourceItem.external_item_id == item.external_item_id,
             )
         )
     ).scalar_one_or_none()
-    if item is None:
-        item = ConnectorSourceItem(
+    if row is None:
+        row = ConnectorSourceItem(
             connection_id=connection_id,
-            target_id=target_id,
-            external_file_id=str(file_meta["id"]),
-            mime_type=file_meta.get("mimeType"),
-            name=str(file_meta.get("name") or file_meta["id"]),
-            source_url=file_meta.get("webViewLink"),
-            source_revision_id=_revision_token(file_meta),
+            resource_id=resource_id,
+            external_item_id=item.external_item_id,
+            mime_type=item.mime_type,
+            name=item.title,
+            source_url=item.source_url,
+            source_revision_id=item.source_revision_id,
             internal_document_id=document_id,
             item_status=status,
             unsupported_reason=unsupported_reason,
             error_message=error_message,
             last_seen_at=utcnow(),
             last_synced_at=utcnow(),
+            provider_metadata=item.provider_metadata,
         )
-        session.add(item)
+        session.add(row)
     else:
-        item.mime_type = file_meta.get("mimeType")
-        item.name = str(file_meta.get("name") or item.name)
-        item.source_url = file_meta.get("webViewLink")
-        item.source_revision_id = _revision_token(file_meta)
-        item.internal_document_id = document_id
-        item.item_status = status
-        item.unsupported_reason = unsupported_reason
-        item.error_message = error_message
-        item.last_seen_at = utcnow()
-        item.last_synced_at = utcnow()
+        row.mime_type = item.mime_type
+        row.name = item.title
+        row.source_url = item.source_url
+        row.source_revision_id = item.source_revision_id
+        row.internal_document_id = document_id
+        row.item_status = status
+        row.unsupported_reason = unsupported_reason
+        row.error_message = error_message
+        row.last_seen_at = utcnow()
+        row.last_synced_at = utcnow()
+        row.provider_metadata = item.provider_metadata
     await session.flush()
-    return item
+    return row
 
 
 async def _archive_document_if_unreferenced(session: AsyncSession, document_id: UUID | None) -> None:
@@ -1118,38 +1816,52 @@ async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSe
         if job is None:
             return
         connection = await session.get(ConnectorConnection, job.connection_id)
-        target = await session.get(ConnectorSyncTarget, job.target_id)
-        if connection is None or target is None:
-            raise ConnectorError("Connector sync job references missing connection/target.")
-        target.last_sync_started_at = utcnow()
+        resource = await session.get(ConnectorResource, job.resource_id)
+        if connection is None or resource is None:
+            raise ConnectorError("Connector sync job references missing connection/resource.")
+        resource.last_sync_started_at = utcnow()
         await session.commit()
 
-        discovered_files = await _discover_target_files(session, connection, target)
-        seen_ids = {str(item["id"]) for item in discovered_files}
+        sync_items = await _sync_items_for_resource(session, connection, resource)
+        seen_ids = {item.external_item_id for item in sync_items}
         counts = {"imported": 0, "unchanged": 0, "unsupported": 0, "failed": 0, "deleted": 0}
 
-        for file_meta in discovered_files:
+        for item in sync_items:
             try:
-                extracted = await _download_google_file(session, connection, file_meta)
-                if not extracted.content.strip():
+                if item.unsupported_reason:
+                    counts["unsupported"] += 1
+                    await _upsert_source_item(
+                        session,
+                        connection_id=connection.id,
+                        resource_id=resource.id,
+                        item=item,
+                        document_id=None,
+                        status=ConnectorSourceItemStatus.unsupported.value,
+                        unsupported_reason=item.unsupported_reason,
+                    )
+                    await session.commit()
+                    continue
+
+                if not item.content or not item.content.strip():
                     raise ConnectorError("Extracted content is empty.")
+
                 payload = IngestDocumentRequest(
-                    source_system="google-drive",
-                    source_external_id=str(file_meta["id"]),
-                    source_revision_id=_revision_token(file_meta),
-                    source_url=file_meta.get("webViewLink"),
-                    slug=_stable_document_slug(str(file_meta.get("name") or file_meta["id"]), str(file_meta["id"])),
-                    title=str(file_meta.get("name") or file_meta["id"]),
-                    content_type=extracted.content_type,  # type: ignore[arg-type]
-                    content=extracted.content,
-                    doc_type=extracted.doc_type,
+                    source_system="google-drive" if connection.provider == ConnectorProvider.google_drive.value else "notion",
+                    source_external_id=item.external_item_id,
+                    source_revision_id=item.source_revision_id,
+                    source_url=item.source_url,
+                    slug=_stable_document_slug(item.title, item.external_item_id),
+                    title=item.title,
+                    content_type=item.content_type,  # type: ignore[arg-type]
+                    content=item.content,
+                    doc_type=item.doc_type,
                     language_code="ko",
                     status="published",
                     metadata={
-                        "provider": "google-drive",
-                        "google_mime_type": file_meta.get("mimeType"),
+                        "provider": connection.provider,
                         "connector_connection_id": str(connection.id),
-                        "connector_target_id": str(target.id),
+                        "connector_resource_id": str(resource.id),
+                        **item.provider_metadata,
                     },
                     priority=110,
                 )
@@ -1159,8 +1871,8 @@ async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSe
                 await _upsert_source_item(
                     session,
                     connection_id=connection.id,
-                    target_id=target.id,
-                    file_meta=file_meta,
+                    resource_id=resource.id,
+                    item=item,
                     document_id=result.document.id,
                     status=status,
                 )
@@ -1169,8 +1881,8 @@ async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSe
                 await _upsert_source_item(
                     session,
                     connection_id=connection.id,
-                    target_id=target.id,
-                    file_meta=file_meta,
+                    resource_id=resource.id,
+                    item=item,
                     document_id=None,
                     status=ConnectorSourceItemStatus.unsupported.value,
                     unsupported_reason=str(exc),
@@ -1181,8 +1893,8 @@ async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSe
                 await _upsert_source_item(
                     session,
                     connection_id=connection.id,
-                    target_id=target.id,
-                    file_meta=file_meta,
+                    resource_id=resource.id,
+                    item=item,
                     document_id=None,
                     status=ConnectorSourceItemStatus.failed.value,
                     error_message=str(exc),
@@ -1191,22 +1903,24 @@ async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSe
 
         existing_items = list(
             (
-                await session.execute(select(ConnectorSourceItem).where(ConnectorSourceItem.target_id == target.id))
+                await session.execute(
+                    select(ConnectorSourceItem).where(ConnectorSourceItem.resource_id == resource.id)
+                )
             ).scalars().all()
         )
         for item in existing_items:
-            if item.external_file_id in seen_ids:
+            if item.external_item_id in seen_ids:
                 continue
             item.item_status = ConnectorSourceItemStatus.deleted.value
             item.last_synced_at = utcnow()
             counts["deleted"] += 1
             await _archive_document_if_unreferenced(session, item.internal_document_id)
 
-        target.last_sync_completed_at = utcnow()
-        target.last_sync_summary = counts
-        if target.sync_mode == ConnectorSyncMode.auto.value and target.sync_interval_minutes:
-            target.next_auto_sync_at = future_utc(seconds=target.sync_interval_minutes * 60)
+        resource.last_sync_completed_at = utcnow()
+        resource.last_sync_summary = counts
+        if resource.sync_mode == ConnectorSyncMode.auto.value and resource.sync_interval_minutes:
+            resource.next_auto_sync_at = future_utc(seconds=resource.sync_interval_minutes * 60)
         else:
-            target.next_auto_sync_at = None
+            resource.next_auto_sync_at = None
         await mark_connector_job_completed(session, job.id, counts)
         await session.commit()

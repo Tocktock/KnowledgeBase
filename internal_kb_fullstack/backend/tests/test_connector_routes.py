@@ -14,7 +14,7 @@ from app.services.connectors import _default_sync_schedule_for_scope
 
 
 @pytest.mark.asyncio
-async def test_start_google_auth_route_accepts_post_auth_drive_action(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_google_auth_route_accepts_post_auth_provider_action(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
     async def override_session():
@@ -26,12 +26,14 @@ async def test_start_google_auth_route_accepts_post_auth_drive_action(monkeypatc
         return_path: str = "/",
         post_auth_action: str | None = None,
         owner_scope: str | None = None,
+        provider: str | None = None,
     ) -> OAuthStartResponse:
         captured.update(
             {
                 "return_path": return_path,
                 "post_auth_action": post_auth_action,
                 "owner_scope": owner_scope,
+                "provider": provider,
             }
         )
         return OAuthStartResponse(authorization_url="https://accounts.example.test/auth", state="state-token")
@@ -45,8 +47,9 @@ async def test_start_google_auth_route_accepts_post_auth_drive_action(monkeypatc
             "/v1/auth/google/start",
             params={
                 "return_to": "/connectors",
-                "post_auth_action": "connect_drive",
-                "owner_scope": "shared",
+                "post_auth_action": "connect_provider",
+                "owner_scope": "workspace",
+                "provider": "notion",
             },
         )
 
@@ -55,8 +58,9 @@ async def test_start_google_auth_route_accepts_post_auth_drive_action(monkeypatc
     assert response.status_code == 200
     assert captured == {
         "return_path": "/connectors",
-        "post_auth_action": "connect_drive",
-        "owner_scope": "shared",
+        "post_auth_action": "connect_provider",
+        "owner_scope": "workspace",
+        "provider": "notion",
     }
     assert response.json()["authorization_url"] == "https://accounts.example.test/auth"
 
@@ -71,10 +75,30 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
 
     async def fake_get_connectors_readiness(_session: object, _auth_user: object | None) -> ConnectorReadinessResponse:
         return ConnectorReadinessResponse(
-            oauth_configured=True,
-            organization_connection_exists=False,
-            organization_connection_status=None,
-            viewer_can_manage_org_connection=False,
+            providers=[
+                {
+                    "provider": "google_drive",
+                    "oauth_configured": True,
+                    "workspace_connection_exists": False,
+                    "workspace_connection_status": None,
+                    "viewer_can_manage_workspace_connection": False,
+                    "setup_state": "setup_needed",
+                    "healthy_source_count": 0,
+                    "needs_attention_count": 0,
+                    "recommended_templates": ["shared_drive", "folder"],
+                },
+                {
+                    "provider": "notion",
+                    "oauth_configured": False,
+                    "workspace_connection_exists": False,
+                    "workspace_connection_status": None,
+                    "viewer_can_manage_workspace_connection": False,
+                    "setup_state": "not_configured",
+                    "healthy_source_count": 0,
+                    "needs_attention_count": 0,
+                    "recommended_templates": ["page", "database"],
+                },
+            ]
         )
 
     monkeypatch.setattr(connectors_route, "get_connectors_readiness", fake_get_connectors_readiness)
@@ -89,13 +113,33 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
 
     assert response.status_code == 200
     assert response.json() == {
-        "oauth_configured": True,
-        "organization_connection_exists": False,
-        "organization_connection_status": None,
-        "viewer_can_manage_org_connection": False,
+        "providers": [
+            {
+                "provider": "google_drive",
+                "oauth_configured": True,
+                "workspace_connection_exists": False,
+                "workspace_connection_status": None,
+                "viewer_can_manage_workspace_connection": False,
+                "setup_state": "setup_needed",
+                "healthy_source_count": 0,
+                "needs_attention_count": 0,
+                "recommended_templates": ["shared_drive", "folder"],
+            },
+            {
+                "provider": "notion",
+                "oauth_configured": False,
+                "workspace_connection_exists": False,
+                "workspace_connection_status": None,
+                "viewer_can_manage_workspace_connection": False,
+                "setup_state": "not_configured",
+                "healthy_source_count": 0,
+                "needs_attention_count": 0,
+                "recommended_templates": ["page", "database"],
+            },
+        ]
     }
 
 
 def test_default_sync_schedule_uses_scope_defaults() -> None:
-    assert _default_sync_schedule_for_scope("shared") == ("auto", 60)
-    assert _default_sync_schedule_for_scope("user") == ("manual", None)
+    assert _default_sync_schedule_for_scope("workspace") == ("auto", 60)
+    assert _default_sync_schedule_for_scope("personal") == ("manual", None)

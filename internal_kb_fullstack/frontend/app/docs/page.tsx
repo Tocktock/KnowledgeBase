@@ -25,7 +25,7 @@ export default async function DocsPage({ searchParams }: DocsPageProps) {
             {preset?.docsTitle ?? '문서 탐색'}
           </h1>
           <p className="mt-2 text-sm leading-7 text-neutral-500">
-            {preset?.docsSubtitle ?? '팀, 타입, 본문 기준으로 문서를 좁혀가며 찾을 수 있습니다.'}
+            {preset?.docsSubtitle ?? '연결된 외부 자료와 내부 문서를 함께 살피면서, 어떤 정보가 최신이고 신뢰 가능한지 바로 확인할 수 있습니다.'}
           </p>
           {preset ? (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -45,6 +45,11 @@ export default async function DocsPage({ searchParams }: DocsPageProps) {
           </Link>
         ) : null}
       </div>
+      {!preset ? (
+        <div className="rounded-3xl border border-neutral-200 bg-white/70 px-5 py-4 text-sm leading-7 text-neutral-600 dark:border-neutral-800 dark:bg-neutral-950/60 dark:text-neutral-400">
+          워크스페이스 문서는 Google Drive, Notion, 직접 작성한 문서가 함께 쌓이는 지식 레이어입니다. 문서 카드에서 출처와 최신성을 먼저 확인한 뒤 상세로 들어가세요.
+        </div>
+      ) : null}
       <DocsExplorer key={preset?.key ?? 'all'} preset={preset ?? undefined} />
     </div>
   )

@@ -8,6 +8,7 @@ This folder stores architectural decisions and durable project memory.
 - [0002 - Revision identity uses source checksum](./0002-revision-identity-uses-source-checksum.md)
 - [0003 - Document links are a projection](./0003-document-links-are-a-projection.md)
 - [0004 - One active embedding profile per deployment](./0004-one-active-embedding-profile-per-deployment.md)
+- [0005 - Workspace data connectors are zero-config for end users](./0005-workspace-data-connectors.md)
 - [project-memory](./project-memory.md)
 
 ## How to use this folder

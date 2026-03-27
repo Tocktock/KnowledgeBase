@@ -16,7 +16,17 @@
 - If a future UI writes canonical data, route the write through backend services instead of writing tables directly.
 - If link rules change, update both the ingestion projection logic and the frontend renderer rules.
 
+## Connector target state
+
+- The long-term connector model is workspace-first, not deployment-shared.
+- End users should never need provider credentials, external identifiers, or low-level connector fields to connect a source.
+- Shared organizational sources are the primary connector path. Personal sources stay secondary.
+- Workspace membership is invite-only and workspace admins own source connection changes.
+- Connector UX should start from templates and provider-native selection, not raw resource CRUD.
+
 ## Pending follow-ups
 
+- Migrate connector ownership from `shared|user` to `workspace|personal` with a default workspace backfill path.
+- Add workspace and membership tables before expanding connector UX further.
 - Replace handwritten frontend API types with generated types from backend OpenAPI.
 - Split retrieval/search further if ranking policy grows more complex.

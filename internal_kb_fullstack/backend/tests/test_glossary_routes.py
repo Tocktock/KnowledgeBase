@@ -18,6 +18,7 @@ from app.schemas.glossary import (
     GlossarySupportItem,
 )
 from app.schemas.search import SearchExplainResponse, SearchHit, SearchResponse
+from app.schemas.trust import TrustSummary
 from app.services.glossary import GlossaryNotFoundError
 
 
@@ -70,6 +71,14 @@ def make_glossary_summary() -> GlossaryConceptSummary:
         metadata={},
         refreshed_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
+        trust=TrustSummary(
+            source_label="Notion",
+            source_url="glossary://concept/1",
+            authority_kind="approved_concept",
+            last_synced_at=datetime.now(timezone.utc),
+            freshness_state="fresh",
+            evidence_count=4,
+        ),
     )
 
 
@@ -94,6 +103,14 @@ def make_glossary_detail() -> GlossaryConceptDetailResponse:
                 support_group_key="센디 차량",
                 support_text="센디 차량은 차량 분류 기준 문서입니다.",
                 metadata={},
+                trust=TrustSummary(
+                    source_label="Notion",
+                    source_url="glossary://concept/1",
+                    authority_kind="concept_evidence",
+                    last_synced_at=datetime.now(timezone.utc),
+                    freshness_state="fresh",
+                    evidence_count=4,
+                ),
             )
         ],
         related_concepts=[],
@@ -130,6 +147,14 @@ async def test_search_route_returns_concept_aware_payload(monkeypatch: pytest.Mo
                     evidence_kind="canonical",
                     evidence_strength=1.9,
                     metadata={},
+                    trust=TrustSummary(
+                        source_label="Notion",
+                        source_url="glossary://concept/1",
+                        authority_kind="approved_concept",
+                        last_synced_at=datetime.now(timezone.utc),
+                        freshness_state="fresh",
+                        evidence_count=1,
+                    ),
                 )
             ],
         )

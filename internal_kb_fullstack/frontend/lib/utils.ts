@@ -73,6 +73,32 @@ const JOB_KIND_LABELS: Record<string, string> = {
   connector_sync: '연결 동기화',
 }
 
+const TRUST_AUTHORITY_LABELS: Record<string, string> = {
+  synced_source: '연결된 원본',
+  workspace_note: '직접 작성',
+  workspace_curated: '워크스페이스 문서',
+  approved_concept: '승인된 개념',
+  candidate_concept: '검토 중 개념',
+  concept_evidence: '개념 근거',
+}
+
+const TRUST_FRESHNESS_LABELS: Record<string, string> = {
+  fresh: '최신',
+  aging: '확인 필요',
+  stale: '오래됨',
+  unknown: '동기화 정보 없음',
+}
+
+const TRUST_SOURCE_LABELS: Record<string, string> = {
+  'Google Drive': 'Google Drive',
+  Notion: 'Notion',
+  Repo: '저장소',
+  Upload: '업로드 문서',
+  Manual: '직접 작성',
+  'Workspace note': '워크스페이스 문서',
+  'Concept layer': '핵심 개념 레이어',
+}
+
 const CONNECTOR_STATUS_LABELS: Record<string, string> = {
   active: '정상 연결',
   needs_reauth: '재인증 필요',
@@ -81,13 +107,20 @@ const CONNECTOR_STATUS_LABELS: Record<string, string> = {
 }
 
 const CONNECTOR_SCOPE_LABELS: Record<string, string> = {
-  shared: '조직 연결',
-  user: '내 연결',
+  workspace: '조직 연결',
+  personal: '내 연결',
 }
 
-const CONNECTOR_TARGET_TYPE_LABELS: Record<string, string> = {
+const CONNECTOR_PROVIDER_LABELS: Record<string, string> = {
+  google_drive: 'Google Drive',
+  notion: 'Notion',
+}
+
+const CONNECTOR_RESOURCE_KIND_LABELS: Record<string, string> = {
   folder: '폴더',
   shared_drive: '공유 드라이브',
+  page: '페이지',
+  database: '데이터베이스',
 }
 
 const CONNECTOR_SYNC_MODE_LABELS: Record<string, string> = {
@@ -172,6 +205,18 @@ export function formatJobKindLabel(value?: string | null) {
   return formatMappedLabel(value, JOB_KIND_LABELS)
 }
 
+export function formatAuthorityKindLabel(value?: string | null) {
+  return formatMappedLabel(value, TRUST_AUTHORITY_LABELS)
+}
+
+export function formatFreshnessStateLabel(value?: string | null) {
+  return formatMappedLabel(value, TRUST_FRESHNESS_LABELS)
+}
+
+export function formatTrustSourceLabel(value?: string | null) {
+  return formatMappedLabel(value, TRUST_SOURCE_LABELS)
+}
+
 export function formatConnectorStatusLabel(value?: string | null) {
   return formatMappedLabel(value, CONNECTOR_STATUS_LABELS)
 }
@@ -180,8 +225,12 @@ export function formatConnectorScopeLabel(value?: string | null) {
   return formatMappedLabel(value, CONNECTOR_SCOPE_LABELS)
 }
 
-export function formatConnectorTargetTypeLabel(value?: string | null) {
-  return formatMappedLabel(value, CONNECTOR_TARGET_TYPE_LABELS)
+export function formatConnectorProviderLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_PROVIDER_LABELS)
+}
+
+export function formatConnectorResourceKindLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_RESOURCE_KIND_LABELS)
 }
 
 export function formatConnectorSyncModeLabel(value?: string | null) {
@@ -205,6 +254,7 @@ export function formatJobTitle(value?: string | null) {
   if (value.startsWith('Glossary draft: ')) return `용어집 초안 생성: ${value.slice('Glossary draft: '.length)}`
   if (value === 'Glossary refresh (full)') return '용어집 새로고침 (전체)'
   if (value === 'Glossary refresh (incremental)') return '용어집 새로고침 (변경분)'
-  if (value === 'Drive 동기화') return 'Drive 동기화'
+  if (value === '리소스 동기화') return '리소스 동기화'
+  if (value.startsWith('리소스 동기화: ')) return value
   return value
 }

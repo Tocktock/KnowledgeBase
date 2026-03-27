@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 
+import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConcepts } from '@/lib/api/server'
@@ -15,9 +16,9 @@ export default async function GlossaryPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">용어집</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">핵심 개념</h1>
         <p className="mt-2 text-sm leading-7 text-neutral-500">
-          승인된 개념 문서를 중심으로 탐색하는 개념 레이어입니다.
+          반복해서 등장하는 팀 용어를 대표 문서와 근거 문서로 정리한 의미 레이어입니다.
         </p>
       </div>
 
@@ -26,12 +27,15 @@ export default async function GlossaryPage() {
           <Link key={concept.id} href={`/glossary/${concept.slug}`}>
             <Card className="h-full p-5 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:hover:border-blue-900">
               <div className="mb-2 flex flex-wrap gap-2">
-                <Badge>용어집</Badge>
+                <Badge>핵심 개념</Badge>
                 <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                 {concept.owner_team_hint ? <Badge>{formatOwnerTeamLabel(concept.owner_team_hint)}</Badge> : null}
               </div>
               <div className="mb-1 text-lg font-semibold text-neutral-950 dark:text-neutral-50">{concept.display_term}</div>
               <div className="text-xs text-neutral-400">근거 문서 {concept.support_doc_count}개 · 신뢰도 {concept.confidence_score.toFixed(2)}</div>
+              <div className="mt-3">
+                <TrustBadges trust={concept.trust} />
+              </div>
               <p className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
                 {concept.aliases.slice(0, 5).join(', ') || '대표 용어와 근거 문서로 정제된 개념입니다.'}
               </p>

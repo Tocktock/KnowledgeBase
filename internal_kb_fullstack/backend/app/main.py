@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 
-from app.api.routes import admin, auth, connectors, documents, glossary, health, search
+from app.api.routes import admin, auth, connectors, documents, glossary, health, search, workspace
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.engine import dispose_engine, get_engine
@@ -29,6 +29,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(workspace.router)
 app.include_router(connectors.router)
 app.include_router(documents.router)
 app.include_router(search.router)

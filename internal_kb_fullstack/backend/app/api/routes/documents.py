@@ -35,6 +35,7 @@ from app.services.document_drafts import (
 from app.services.ingest import SlugConflictError, ingest_document
 from app.services.jobs import request_document_reindex
 from app.services.parser import DocumentParser
+from app.services.trust import build_document_trust
 from app.services.wiki_graph import extract_heading_items, extract_internal_slugs, get_document_relations
 
 router = APIRouter(prefix="/v1/documents", tags=["documents"])
@@ -58,6 +59,12 @@ def _document_summary(document: Document) -> DocumentSummary:
         created_at=document.created_at,
         updated_at=document.updated_at,
         last_ingested_at=document.last_ingested_at,
+        trust=build_document_trust(
+            source_system=document.source_system,
+            source_url=document.source_url,
+            last_synced_at=document.last_ingested_at,
+            doc_type=document.doc_type,
+        ),
     )
 
 
@@ -98,6 +105,18 @@ def _slug_conflict_detail(document: Document) -> dict[str, object]:
     }
 
 
+def _document_list_item(row: dict[str, object]) -> DocumentListItem:
+    return DocumentListItem(
+        **row,
+        trust=build_document_trust(
+            source_system=str(row.get("source_system") or ""),
+            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+            last_synced_at=row.get("last_ingested_at"),  # type: ignore[arg-type]
+            doc_type=row.get("doc_type") if isinstance(row.get("doc_type"), str) else None,
+        ),
+    )
+
+
 @router.get("", response_model=DocumentListResponse)
 async def list_documents_route(
     q: str | None = Query(default=None, alias="query"),
@@ -117,7 +136,7 @@ async def list_documents_route(
         limit=limit,
         offset=offset,
     )
-    items = [DocumentListItem(**row) for row in rows]
+    items = [_document_list_item(row) for row in rows]
     return DocumentListResponse(items=items, total=total, limit=limit, offset=offset)
 
 

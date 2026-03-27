@@ -83,13 +83,20 @@ class UserRoleKind(str, enum.Enum):
     member = "member"
 
 
+class WorkspaceMembershipRole(str, enum.Enum):
+    owner = "owner"
+    admin = "admin"
+    member = "member"
+
+
 class ConnectorProvider(str, enum.Enum):
     google_drive = "google_drive"
+    notion = "notion"
 
 
 class ConnectorOwnerScope(str, enum.Enum):
-    shared = "shared"
-    user = "user"
+    workspace = "workspace"
+    personal = "personal"
 
 
 class ConnectorStatus(str, enum.Enum):
@@ -101,15 +108,17 @@ class ConnectorStatus(str, enum.Enum):
 
 class ConnectorOAuthPurpose(str, enum.Enum):
     login = "login"
-    connect_drive = "connect_drive"
+    connect_provider = "connect_provider"
 
 
-class ConnectorTargetType(str, enum.Enum):
+class ConnectorResourceKind(str, enum.Enum):
     folder = "folder"
     shared_drive = "shared_drive"
+    page = "page"
+    database = "database"
 
 
-class ConnectorTargetStatus(str, enum.Enum):
+class ConnectorResourceStatus(str, enum.Enum):
     active = "active"
     paused = "paused"
 
@@ -165,10 +174,12 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
-    google_subject: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    google_subject: Mapped[str | None] = mapped_column(Text(), nullable=True, unique=True)
     email: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(Text(), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    password_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=UserStatus.active.value)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -181,6 +192,11 @@ class UserSession(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     session_token_hash: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    current_workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -196,12 +212,84 @@ class UserRole(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    slug: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text(), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class WorkspaceMembership(Base):
+    __tablename__ = "workspace_memberships"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_workspace_memberships_workspace_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class WorkspaceInvitation(Base):
+    __tablename__ = "workspace_invitations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    invited_email: Mapped[str] = mapped_column(Text(), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    token_hash: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class ConnectorOAuthState(Base):
     __tablename__ = "connector_oauth_states"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     state: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
     purpose: Mapped[str] = mapped_column(String(30), nullable=False)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     owner_scope: Mapped[str] = mapped_column(String(20), nullable=False)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     code_verifier: Mapped[str] = mapped_column(Text(), nullable=False)
@@ -215,6 +303,7 @@ class ConnectorConnection(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
     owner_scope: Mapped[str] = mapped_column(String(20), nullable=False)
     owner_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     display_name: Mapped[str] = mapped_column(Text(), nullable=False)
@@ -230,36 +319,40 @@ class ConnectorConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-class ConnectorSyncTarget(Base):
-    __tablename__ = "connector_sync_targets"
-    __table_args__ = (UniqueConstraint("connection_id", "target_type", "external_id", name="uq_connector_target_external"),)
+class ConnectorResource(Base):
+    __tablename__ = "connector_resources"
+    __table_args__ = (UniqueConstraint("connection_id", "resource_kind", "external_id", name="uq_connector_resource_external"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_connections.id", ondelete="CASCADE"), nullable=False)
-    target_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    resource_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     external_id: Mapped[str] = mapped_column(Text(), nullable=False)
     name: Mapped[str] = mapped_column(Text(), nullable=False)
-    include_subfolders: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="true")
+    resource_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    parent_external_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    sync_children: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="true")
     sync_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorSyncMode.manual.value)
     sync_interval_minutes: Mapped[int | None] = mapped_column(Integer(), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorTargetStatus.active.value)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorResourceStatus.active.value)
     sync_cursor: Mapped[str | None] = mapped_column(Text(), nullable=True)
     last_sync_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_auto_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    provider_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class ConnectorSourceItem(Base):
     __tablename__ = "connector_source_items"
-    __table_args__ = (UniqueConstraint("connection_id", "target_id", "external_file_id", name="uq_connector_source_item_external"),)
+    __table_args__ = (UniqueConstraint("connection_id", "resource_id", "external_item_id", name="uq_connector_source_item_external"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_connections.id", ondelete="CASCADE"), nullable=False)
-    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_sync_targets.id", ondelete="CASCADE"), nullable=False)
-    external_file_id: Mapped[str] = mapped_column(Text(), nullable=False)
+    resource_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_resources.id", ondelete="CASCADE"), nullable=False)
+    external_item_id: Mapped[str] = mapped_column(Text(), nullable=False)
     mime_type: Mapped[str | None] = mapped_column(Text(), nullable=True)
     name: Mapped[str] = mapped_column(Text(), nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
@@ -270,6 +363,7 @@ class ConnectorSourceItem(Base):
     error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -394,7 +488,7 @@ class ConnectorSyncJob(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     kind: Mapped[str] = mapped_column(String(30), nullable=False, server_default=ConnectorSyncJobKind.sync.value)
     connection_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_connections.id", ondelete="CASCADE"), nullable=False)
-    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_sync_targets.id", ondelete="CASCADE"), nullable=False)
+    resource_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("connector_resources.id", ondelete="CASCADE"), nullable=False)
     sync_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorSyncMode.manual.value)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=JobStatus.queued.value)
     priority: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="90")
@@ -499,10 +593,16 @@ class GlossaryJob(Base):
 
 Index("ix_users_email", User.email)
 Index("ix_user_sessions_user_id", UserSession.user_id)
+Index("ix_user_sessions_current_workspace_id", UserSession.current_workspace_id)
+Index("ix_workspaces_slug", Workspace.slug)
+Index("ix_workspace_memberships_workspace_role", WorkspaceMembership.workspace_id, WorkspaceMembership.role)
+Index("ix_workspace_memberships_user_id", WorkspaceMembership.user_id)
+Index("ix_workspace_invitations_workspace_id", WorkspaceInvitation.workspace_id)
+Index("ix_workspace_invitations_invited_email", WorkspaceInvitation.invited_email)
 Index("ix_connector_oauth_states_expires_at", ConnectorOAuthState.expires_at)
-Index("ix_connector_connections_owner_scope", ConnectorConnection.owner_scope, ConnectorConnection.owner_user_id)
-Index("ix_connector_sync_targets_connection_id", ConnectorSyncTarget.connection_id)
-Index("ix_connector_sync_targets_auto_due", ConnectorSyncTarget.sync_mode, ConnectorSyncTarget.next_auto_sync_at)
+Index("ix_connector_connections_workspace_scope", ConnectorConnection.workspace_id, ConnectorConnection.owner_scope, ConnectorConnection.owner_user_id)
+Index("ix_connector_resources_connection_id", ConnectorResource.connection_id)
+Index("ix_connector_resources_auto_due", ConnectorResource.sync_mode, ConnectorResource.next_auto_sync_at)
 Index("ix_connector_source_items_document_id", ConnectorSourceItem.internal_document_id)
-Index("ix_connector_source_items_target_status", ConnectorSourceItem.target_id, ConnectorSourceItem.item_status)
+Index("ix_connector_source_items_resource_status", ConnectorSourceItem.resource_id, ConnectorSourceItem.item_status)
 Index("ix_connector_sync_jobs_status_priority_requested", ConnectorSyncJob.status, ConnectorSyncJob.priority, ConnectorSyncJob.requested_at)

@@ -46,10 +46,15 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str | None = None
+    notion_oauth_client_id: str = ""
+    notion_oauth_client_secret: str = ""
+    notion_oauth_redirect_uri: str | None = None
     connector_token_encryption_key: str = ""
     session_encryption_key: str = ""
     session_max_age_seconds: int = 60 * 60 * 24 * 14
     oauth_state_ttl_seconds: int = 60 * 10
+    workspace_invitation_ttl_seconds: int = 60 * 60 * 24 * 7
+    password_reset_ttl_seconds: int = 60 * 60 * 24
 
     chunk_target_tokens: int = 600
     chunk_max_tokens: int = 800

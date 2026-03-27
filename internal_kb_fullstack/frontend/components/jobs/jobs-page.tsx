@@ -14,11 +14,24 @@ const iconForStatus = {
 } as const
 
 export function JobsPage({ jobs }: { jobs: JobSummary[] }) {
+  const queuedCount = jobs.filter((job) => job.status === 'queued').length
+  const processingCount = jobs.filter((job) => job.status === 'processing').length
+  const failedCount = jobs.filter((job) => job.status === 'failed').length
+
   return (
     <div className="space-y-4">
+      <Card className="p-5">
+        <div className="mb-3 text-sm font-semibold text-neutral-900 dark:text-neutral-50">현재 동기화 상태</div>
+        <div className="flex flex-wrap gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+          <Badge>대기 {queuedCount}</Badge>
+          <Badge>처리 중 {processingCount}</Badge>
+          <Badge>실패 {failedCount}</Badge>
+          <Badge>최근 작업 {jobs.length}</Badge>
+        </div>
+      </Card>
       {jobs.length === 0 ? (
         <Card className="p-10 text-center text-sm text-neutral-500">
-          <Activity className="mx-auto mb-3 size-5 text-blue-500" /> 아직 작업이 없습니다.
+          <Activity className="mx-auto mb-3 size-5 text-blue-500" /> 아직 동기화 작업이 없습니다.
         </Card>
       ) : (
         jobs.map((job) => {

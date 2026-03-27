@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.trust import TrustSummary
+
 
 class GlossaryConceptDocumentLink(BaseModel):
     id: UUID
@@ -35,6 +37,7 @@ class GlossaryConceptSummary(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     refreshed_at: datetime
     updated_at: datetime
+    trust: TrustSummary
 
 
 class GlossarySupportItem(BaseModel):
@@ -53,6 +56,7 @@ class GlossarySupportItem(BaseModel):
     support_group_key: str
     support_text: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    trust: TrustSummary
 
 
 class GlossaryConceptDetailResponse(BaseModel):
@@ -82,4 +86,3 @@ class GlossaryConceptUpdateRequest(BaseModel):
 class GlossaryDraftRequest(BaseModel):
     domain: str | None = None
     regenerate: bool = True
-

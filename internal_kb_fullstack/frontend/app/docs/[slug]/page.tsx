@@ -4,11 +4,20 @@ import Link from 'next/link'
 
 import { DocumentRelations } from '@/components/docs/document-relations'
 import { MarkdownRenderer } from '@/components/docs/markdown-renderer'
+import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getDocumentBySlug, getDocumentRelations } from '@/lib/api/server'
 import type { DocumentRelationsResponse } from '@/lib/types'
-import { formatDate, formatDocTypeLabel, formatLanguageLabel, formatOwnerTeamLabel, formatStatusLabel } from '@/lib/utils'
+import {
+  formatAuthorityKindLabel,
+  formatDate,
+  formatDocTypeLabel,
+  formatLanguageLabel,
+  formatOwnerTeamLabel,
+  formatStatusLabel,
+  formatTrustSourceLabel,
+} from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +29,10 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
   const markdown = data.content_markdown ?? data.content_text ?? ''
   const headings = data.headings
   const linkedSlugs = data.linked_slugs
+  const conceptLinks = [...relations.outgoing, ...relations.related, ...relations.backlinks].filter(
+    (item, index, all) =>
+      item.doc_type === 'glossary' && all.findIndex((candidate) => candidate.id === item.id) === index,
+  )
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -40,6 +53,9 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
             {data.revision ? <div className="inline-flex items-center gap-2"><BookMarked className="size-4" /> 버전 {data.revision.revision_number}</div> : null}
             <div className="inline-flex items-center gap-2"><Link2 className="size-4" /> 링크 {linkedSlugs.length}개</div>
           </div>
+          <div className="mt-4">
+            <TrustBadges trust={data.document.trust} showSourceLink={Boolean(data.document.trust.source_url)} />
+          </div>
           {data.document.source_url ? (
             <div className="mt-4 text-sm text-neutral-500">
               원본 링크:{' '}
@@ -59,7 +75,20 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
 
       <div className="space-y-4">
         <Card className="sticky top-24 p-5">
-          <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">문서 개요</div>
+          <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">신뢰 정보</div>
+          <div className="space-y-3 text-sm text-neutral-600 dark:text-neutral-400">
+            <div className="rounded-2xl bg-neutral-50 px-3 py-3 dark:bg-neutral-900">
+              출처 {formatTrustSourceLabel(data.document.trust.source_label)}
+            </div>
+            <div className="rounded-2xl bg-neutral-50 px-3 py-3 dark:bg-neutral-900">
+              최신성 {formatDate(data.document.trust.last_synced_at ?? data.document.updated_at)}
+            </div>
+            <div className="rounded-2xl bg-neutral-50 px-3 py-3 dark:bg-neutral-900">
+              권위 {formatAuthorityKindLabel(data.document.trust.authority_kind)}
+            </div>
+          </div>
+
+          <div className="mb-4 mt-6 text-sm font-semibold text-neutral-900 dark:text-neutral-50">문서 개요</div>
           <div className="space-y-2">
             {headings.length === 0 ? (
               <div className="text-sm text-neutral-500">목차가 없습니다.</div>
@@ -78,6 +107,18 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
                 {linkedSlugs.map((item) => (
                   <Link key={item} href={`/docs/${item}`} className="rounded-full border border-neutral-200 px-3 py-1 text-xs text-neutral-600 transition hover:border-blue-300 hover:text-blue-600 dark:border-neutral-800 dark:text-neutral-400 dark:hover:border-blue-900 dark:hover:text-blue-400">
                     {item}
+                  </Link>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {conceptLinks.length > 0 ? (
+            <>
+              <div className="mb-3 mt-6 text-sm font-semibold text-neutral-900 dark:text-neutral-50">연결된 핵심 개념</div>
+              <div className="flex flex-wrap gap-2">
+                {conceptLinks.map((item) => (
+                  <Link key={item.id} href={`/glossary/${item.slug}`} className="rounded-full border border-neutral-200 px-3 py-1 text-xs text-neutral-600 transition hover:border-blue-300 hover:text-blue-600 dark:border-neutral-800 dark:text-neutral-400 dark:hover:border-blue-900 dark:hover:text-blue-400">
+                    {item.title}
                   </Link>
                 ))}
               </div>

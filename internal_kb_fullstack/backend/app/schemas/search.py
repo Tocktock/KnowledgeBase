@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.trust import TrustSummary
+
 
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
@@ -36,6 +38,7 @@ class SearchHit(BaseModel):
     evidence_strength: float | None = None
     support_group_key: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    trust: TrustSummary
 
 
 class SearchResponse(BaseModel):

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.utils import utcnow
-from app.db.models import ConnectorSyncJob, ConnectorSyncTarget, Document, EmbeddingJob, GlossaryJob, JobStatus, KnowledgeConcept
+from app.db.models import ConnectorResource, ConnectorSyncJob, Document, EmbeddingJob, GlossaryJob, JobStatus, KnowledgeConcept
 from app.schemas.jobs import JobSummary
 from app.services.catalog import get_document_detail
 
@@ -96,11 +96,11 @@ def _glossary_job_title(job: GlossaryJob, concepts_by_id: dict[UUID, KnowledgeCo
     return "Glossary draft"
 
 
-def _connector_job_title(job: ConnectorSyncJob, targets_by_id: dict[UUID, ConnectorSyncTarget]) -> str:
-    target = targets_by_id.get(job.target_id)
-    if target is not None:
-        return f"Drive 동기화: {target.name}"
-    return "Drive 동기화"
+def _connector_job_title(job: ConnectorSyncJob, resources_by_id: dict[UUID, ConnectorResource]) -> str:
+    resource = resources_by_id.get(job.resource_id)
+    if resource is not None:
+        return f"리소스 동기화: {resource.name}"
+    return "리소스 동기화"
 
 
 async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[JobSummary]:
@@ -133,13 +133,13 @@ async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[Jo
             await session.execute(select(KnowledgeConcept).where(KnowledgeConcept.id.in_(concept_ids)))
         ).scalars().all()
     } if concept_ids else {}
-    target_ids = {job.target_id for job in connector_jobs}
-    targets_by_id = {
-        target.id: target
-        for target in (
-            await session.execute(select(ConnectorSyncTarget).where(ConnectorSyncTarget.id.in_(target_ids)))
+    resource_ids = {job.resource_id for job in connector_jobs}
+    resources_by_id = {
+        resource.id: resource
+        for resource in (
+            await session.execute(select(ConnectorResource).where(ConnectorResource.id.in_(resource_ids)))
         ).scalars().all()
-    } if target_ids else {}
+    } if resource_ids else {}
 
     summaries = [
         JobSummary.model_validate(job).model_copy(
@@ -162,8 +162,8 @@ async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[Jo
         JobSummary.model_validate(job).model_copy(
             update={
                 "kind": job.kind,
-                "title": _connector_job_title(job, targets_by_id),
-                "target_id": job.target_id,
+                "title": _connector_job_title(job, resources_by_id),
+                "resource_id": job.resource_id,
                 "connection_id": job.connection_id,
             }
         )
@@ -204,15 +204,15 @@ async def get_job_summary(session: AsyncSession, job_id: UUID) -> JobSummary | N
     if connector_job is None:
         return None
 
-    target = await session.get(ConnectorSyncTarget, connector_job.target_id)
+    resource = await session.get(ConnectorResource, connector_job.resource_id)
     return JobSummary.model_validate(connector_job).model_copy(
         update={
             "kind": connector_job.kind,
             "title": _connector_job_title(
                 connector_job,
-                {target.id: target} if target is not None else {},
+                {resource.id: resource} if resource is not None else {},
             ),
-            "target_id": connector_job.target_id,
+            "resource_id": connector_job.resource_id,
             "connection_id": connector_job.connection_id,
         }
     )

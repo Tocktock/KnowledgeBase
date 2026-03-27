@@ -8,12 +8,16 @@ function appUrl(request: NextRequest, path: string) {
   return new URL(path, `${protocol}://${host}`)
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ provider: string }> },
+) {
+  const { provider } = await params
   const sessionToken = getSessionToken(request)
   if (!sessionToken) {
     return NextResponse.redirect(appUrl(request, '/connectors?connector_error=session_missing'))
   }
-  const response = await proxyJson(`/v1/connectors/google-drive/oauth/callback${request.nextUrl.search}`, {
+  const response = await proxyJson(`/v1/connectors/${encodeURIComponent(provider)}/oauth/callback${request.nextUrl.search}`, {
     sessionToken,
   })
   if (!response.ok) {

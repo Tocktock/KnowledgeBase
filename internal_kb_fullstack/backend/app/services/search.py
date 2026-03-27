@@ -12,6 +12,7 @@ from app.db.models import Document, DocumentChunk, KnowledgeConcept
 from app.schemas.search import SearchExplainResponse, SearchHit, SearchRequest, SearchResponse
 from app.services.embeddings import get_embedding_service
 from app.services.glossary import concept_search_key, get_concept_support_hits, resolve_concept
+from app.services.trust import build_search_hit_trust
 
 
 @dataclass(slots=True)
@@ -100,6 +101,39 @@ def _ranked_hit(hit: SearchHit, *, concept_document_ids: set[str]) -> RankedHit:
     return RankedHit(hit=hit, stage_rank=stage_rank, sort_score=sort_score, family_key=family_key)
 
 
+def _row_to_search_hit(row: dict[str, object]) -> SearchHit:
+    matched_concept_id = row.get("matched_concept_id")
+    return SearchHit(
+        chunk_id=row["chunk_id"],
+        document_id=row["document_id"],
+        revision_id=row["revision_id"],
+        document_title=str(row["document_title"]),
+        document_slug=str(row["document_slug"]),
+        source_system=str(row["source_system"]),
+        source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+        section_title=row.get("section_title") if isinstance(row.get("section_title"), str) else None,
+        heading_path=list(row.get("heading_path") or []),
+        content_text=str(row.get("content_text") or ""),
+        hybrid_score=float(row["hybrid_score"]),
+        vector_score=float(row["vector_score"]) if row.get("vector_score") is not None else None,
+        keyword_score=float(row["keyword_score"]) if row.get("keyword_score") is not None else None,
+        result_type=str(row.get("result_type") or "document"),
+        matched_concept_id=matched_concept_id,
+        matched_concept_term=row.get("matched_concept_term") if isinstance(row.get("matched_concept_term"), str) else None,
+        evidence_kind=row.get("evidence_kind") if isinstance(row.get("evidence_kind"), str) else None,
+        evidence_strength=float(row["evidence_strength"]) if row.get("evidence_strength") is not None else None,
+        support_group_key=row.get("support_group_key") if isinstance(row.get("support_group_key"), str) else None,
+        metadata=dict(row.get("metadata") or {}),
+        trust=build_search_hit_trust(
+            source_system=str(row["source_system"]),
+            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+            last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
+            evidence_count=int(row.get("evidence_count") or 1),
+            matched_concept=matched_concept_id is not None,
+        ),
+    )
+
+
 def _select_diverse_hits(hits: Iterable[SearchHit], *, limit: int, concept_document_ids: set[str]) -> list[SearchHit]:
     staged = sorted(
         (_ranked_hit(hit, concept_document_ids=concept_document_ids) for hit in hits),
@@ -163,6 +197,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
                 d.slug AS document_slug,
                 d.source_system,
                 d.source_url,
+                d.last_ingested_at AS last_synced_at,
                 d.metadata AS document_metadata,
                 dc.section_title,
                 dc.heading_path,
@@ -185,6 +220,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
                 document_slug,
                 source_system,
                 source_url,
+                last_synced_at,
                 document_metadata,
                 section_title,
                 heading_path,
@@ -205,6 +241,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
                 document_slug,
                 source_system,
                 source_url,
+                last_synced_at,
                 document_metadata,
                 section_title,
                 heading_path,
@@ -225,6 +262,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
                 document_slug,
                 source_system,
                 source_url,
+                last_synced_at,
                 document_metadata,
                 section_title,
                 heading_path,
@@ -242,6 +280,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
                 document_slug,
                 source_system,
                 source_url,
+                last_synced_at,
                 document_metadata,
                 section_title,
                 heading_path,
@@ -259,6 +298,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
             document_slug,
             source_system,
             source_url,
+            last_synced_at,
             section_title,
             heading_path,
             content_text,
@@ -271,7 +311,8 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
             NULL::text AS evidence_kind,
             NULL::double precision AS evidence_strength,
             NULL::text AS support_group_key,
-            document_metadata AS metadata
+            document_metadata AS metadata,
+            1::int AS evidence_count
         FROM combined
         GROUP BY
             chunk_id,
@@ -281,6 +322,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
             document_slug,
             source_system,
             source_url,
+            last_synced_at,
             section_title,
             heading_path,
             content_text,
@@ -302,7 +344,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
         },
     )
 
-    hits = [SearchHit(**row) for row in result.mappings().all()]
+    hits = [_row_to_search_hit(dict(row)) for row in result.mappings().all()]
     return SearchResponse(query=payload.query, hits=hits)
 
 
@@ -324,6 +366,7 @@ async def _fetch_canonical_glossary_hit(
                 Document.slug.label("document_slug"),
                 Document.source_system,
                 Document.source_url,
+                Document.last_ingested_at.label("last_synced_at"),
                 DocumentChunk.section_title,
                 DocumentChunk.heading_path,
                 DocumentChunk.content_text,
@@ -337,6 +380,7 @@ async def _fetch_canonical_glossary_hit(
                 literal(float(concept.confidence_score) + 1.0).label("evidence_strength"),
                 literal(concept_search_key(concept.display_term)).label("support_group_key"),
                 Document.meta.label("metadata"),
+                literal(max(concept.support_doc_count, 1)).label("evidence_count"),
             )
             .join(DocumentChunk, DocumentChunk.revision_id == Document.current_revision_id)
             .where(Document.id == concept.canonical_document_id)
@@ -359,7 +403,7 @@ async def _fetch_canonical_glossary_hit(
     ).mappings().first()
     if row is None:
         return None
-    return SearchHit(**row)
+    return _row_to_search_hit(dict(row))
 
 
 def _support_row_to_hit(row: dict[str, object], *, concept: KnowledgeConcept) -> SearchHit:
@@ -384,6 +428,13 @@ def _support_row_to_hit(row: dict[str, object], *, concept: KnowledgeConcept) ->
         evidence_strength=float(row.get("evidence_strength") or 0),
         support_group_key=str(row.get("support_group_key") or concept_search_key(str(row["document_title"]))),
         metadata=dict(row.get("document_metadata") or {}),
+        trust=build_search_hit_trust(
+            source_system=str(row["source_system"]),
+            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+            last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
+            evidence_count=max(int(concept.support_doc_count or 1), 1),
+            matched_concept=True,
+        ),
     )
 
 
