@@ -38,6 +38,7 @@ Canonical schema modules:
   - `review_required_count`
 - Important behavior:
   - anonymous viewers receive unauthenticated marketing-style data only
+  - signed-in users without a current workspace receive `authenticated=true`, `workspace=null`, and a dedicated setup state rather than the anonymous view
   - members receive the consumer-oriented view
   - admins receive the consumer-oriented view plus operational summaries
 

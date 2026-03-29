@@ -6,6 +6,12 @@
 - Header and sidebar expose login entry.
 - Manage navigation is hidden.
 
+## Signed In, No Workspace
+
+- The account surface shows the authenticated user.
+- Home must not render the anonymous marketing CTA.
+- Home explains that the user needs a workspace invite or membership before workspace-specific search and knowledge surfaces become active.
+
 ## Member
 
 - Primary navigation shows Home, Search, Docs, and Concepts.

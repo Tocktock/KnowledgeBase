@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from app.api.deps import get_authenticated_user
 from app.api.routes import workspace as workspace_route
 from app.db.engine import get_db_session
+from app.db.models import ConnectorConnection, ConnectorResource, ConnectorSyncJob, GlossaryValidationRun
 from app.main import app
 from app.schemas.workspace import (
     WorkspaceContextResponse,
@@ -21,7 +22,8 @@ from app.schemas.workspace import (
     WorkspaceSummary,
 )
 from app.services.auth import AuthenticatedUser
-from app.services.workspace import WorkspaceForbiddenError
+from app.services import workspace as workspace_service
+from app.services.workspace import WorkspaceForbiddenError, get_workspace_overview
 
 
 def make_auth_user(*, role: str = "owner") -> AuthenticatedUser:
@@ -33,6 +35,48 @@ def make_auth_user(*, role: str = "owner") -> AuthenticatedUser:
         current_workspace_name="Default Workspace",
         current_workspace_role=role,
     )
+
+
+class GuardWorkspaceSession:
+    async def execute(self, _statement):
+        raise AssertionError("execute() should not be used for the no-workspace overview branch")
+
+
+class FakeScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+    def scalar_one(self):
+        return self.value
+
+
+class FakeScalarsResult:
+    def __init__(self, values):
+        self.values = values
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.values
+
+
+class WorkspaceOverviewSession:
+    async def execute(self, statement):
+        descriptions = getattr(statement, "column_descriptions", None) or []
+        if descriptions:
+            entity = descriptions[0].get("entity")
+            name = descriptions[0].get("name")
+            if entity in {ConnectorConnection, ConnectorResource, ConnectorSyncJob}:
+                return FakeScalarsResult([])
+            if entity is GlossaryValidationRun:
+                return FakeScalarResult(None)
+            if name == "count":
+                return FakeScalarResult(0)
+        raise AssertionError(f"Unexpected statement: {statement!s}")
 
 
 @pytest.mark.asyncio
@@ -95,6 +139,76 @@ async def test_get_workspace_overview_route_supports_anonymous(monkeypatch: pyte
     assert response.status_code == 200
     assert response.json()["authenticated"] is False
     assert response.json()["setup_state"] == "anonymous"
+
+
+@pytest.mark.asyncio
+async def test_get_workspace_overview_keeps_signed_in_user_without_workspace_out_of_anonymous_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_user = AuthenticatedUser(
+        user=SimpleNamespace(id=uuid4(), email="member@example.com", name="Member", avatar_url=None),
+        roles=["member"],
+        current_workspace_id=None,
+        current_workspace_slug=None,
+        current_workspace_name=None,
+        current_workspace_role=None,
+    )
+
+    async def fake_list_documents(_session, *, limit: int = 6, **_kwargs):
+        assert limit == 6
+        return [], 0
+
+    async def fake_list_glossary_concepts(_session, **_kwargs):
+        return SimpleNamespace(items=[])
+
+    monkeypatch.setattr(workspace_service, "list_documents", fake_list_documents)
+    monkeypatch.setattr(workspace_service, "list_glossary_concepts", fake_list_glossary_concepts)
+
+    response = await get_workspace_overview(GuardWorkspaceSession(), auth_user)
+
+    assert response.authenticated is True
+    assert response.workspace is None
+    assert response.setup_state == "workspace_access_required"
+    assert response.featured_docs == []
+    assert response.featured_concepts == []
+    assert response.next_actions == [
+        "워크스페이스 관리자에게 초대 링크를 요청하세요.",
+        "초대를 수락하면 검색, 문서, 핵심 개념 화면이 워크스페이스 기준으로 활성화됩니다.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_workspace_overview_with_workspace_returns_role_aware_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_user = make_auth_user(role="owner")
+
+    async def fake_list_documents(_session, *, limit: int = 6, **_kwargs):
+        assert limit == 6
+        return [], 0
+
+    async def fake_list_glossary_concepts(_session, **_kwargs):
+        return SimpleNamespace(items=[])
+
+    monkeypatch.setattr(workspace_service, "list_documents", fake_list_documents)
+    monkeypatch.setattr(workspace_service, "list_glossary_concepts", fake_list_glossary_concepts)
+
+    response = await get_workspace_overview(WorkspaceOverviewSession(), auth_user)
+
+    assert response.authenticated is True
+    assert response.workspace is not None
+    assert response.workspace.slug == "default"
+    assert response.viewer_role == "owner"
+    assert response.can_manage_connectors is True
+    assert response.setup_state == "setup_needed"
+    assert response.source_health.workspace_connection_count == 0
+    assert response.source_health.healthy_source_count == 0
+    assert response.source_health.needs_attention_count == 0
+    assert response.latest_validation_run is None
+    assert response.review_required_count == 0
+    assert response.featured_docs == []
+    assert response.featured_concepts == []
+    assert response.recent_sync_issues == []
 
 
 @pytest.mark.asyncio

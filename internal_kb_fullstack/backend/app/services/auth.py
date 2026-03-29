@@ -104,6 +104,11 @@ def _app_callback_path(path: str) -> str:
     return f"{settings.app_public_url.rstrip('/')}{path}"
 
 
+def _google_login_redirect_uri() -> str:
+    settings = get_settings()
+    return settings.google_oauth_redirect_uri or _app_callback_path("/api/auth/google/callback")
+
+
 def _safe_return_path(value: str | None) -> str:
     if not value or not value.startswith("/"):
         return "/connectors"
@@ -478,7 +483,7 @@ async def start_google_login(
     params = httpx.QueryParams(
         {
             "client_id": get_settings().google_oauth_client_id,
-            "redirect_uri": _app_callback_path("/api/auth/google/callback"),
+            "redirect_uri": _google_login_redirect_uri(),
             "response_type": "code",
             "scope": " ".join(LOGIN_SCOPES),
             "state": state,
@@ -505,7 +510,7 @@ async def complete_google_login(session: AsyncSession, *, state: str, code: str)
     token_data = await _google_token_exchange(
         code=code,
         code_verifier=state_row.code_verifier,
-        redirect_uri=_app_callback_path("/api/auth/google/callback"),
+        redirect_uri=_google_login_redirect_uri(),
     )
     userinfo = await _google_userinfo(token_data["access_token"])
 
@@ -538,15 +543,14 @@ async def complete_google_login(session: AsyncSession, *, state: str, code: str)
     raw_session_token, roles, workspace_context = await _create_user_session(session, user)
     await session.execute(delete(ConnectorOAuthState).where(ConnectorOAuthState.id == state_row.id))
     await session.commit()
-    return AuthCallbackResponse.model_validate(
-        _build_auth_session_response(
-            user=user,
-            roles=roles,
-            workspace_context=workspace_context,
-            session_token=raw_session_token,
-            redirect_to=state_row.return_path or "/",
-        ),
+    session_response = _build_auth_session_response(
+        user=user,
+        roles=roles,
+        workspace_context=workspace_context,
+        session_token=raw_session_token,
+        redirect_to=state_row.return_path or "/",
     )
+    return AuthCallbackResponse.model_validate(session_response.model_dump())
 
 
 async def password_login(session: AsyncSession, payload: PasswordLoginRequest) -> AuthSessionResponse:

@@ -43,7 +43,7 @@ Canonical schema modules:
   - `post_auth_action`
   - `owner_scope`
   - `provider`
-- Response shape: redirect response to Google OAuth.
+- Response model: `OAuthStartResponse`
 - Important error states:
   - provider misconfiguration
   - invalid or disallowed callback state
@@ -54,7 +54,7 @@ Canonical schema modules:
 - Caller: Google OAuth callback.
 - Query parameters:
   - provider callback code/state payload
-- Response model: `AuthSessionResponse`
+- Response model: `AuthCallbackResponse`
 - Important error states:
   - invalid callback state
   - OAuth exchange failure
@@ -153,7 +153,7 @@ Canonical schema modules:
 
 - Purpose: fetch the current workspace summary for the active session.
 - Caller: authenticated user.
-- Response model: `WorkspaceSummary`
+- Response model: `WorkspaceContextResponse`
 
 ### `GET /v1/workspace/overview`
 
@@ -162,7 +162,8 @@ Canonical schema modules:
 - Response model: `WorkspaceOverviewResponse`
 - Important behavior:
   - anonymous viewers receive an unauthenticated overview state
-  - authenticated viewers receive role-aware source health, featured content, and QA summary
+  - signed-in users without workspace membership receive `authenticated=true`, `workspace=null`, and `setup_state=workspace_access_required`
+  - authenticated workspace members receive role-aware source health, featured content, and QA summary
 
 ### `GET /v1/workspace/members`
 

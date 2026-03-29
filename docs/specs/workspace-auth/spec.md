@@ -30,6 +30,9 @@ KnowledgeHub uses workspace-first authentication and membership. Users sign in t
 - `owner` and `admin` can manage shared connectors, invites, Knowledge QA, and sync operations.
 - `member` can consume workspace knowledge but does not operate admin workflows.
 - Workspace joins are invite-only.
+- A signed-in user without any workspace membership remains authenticated, but has no current workspace context until an invite is accepted.
+- Google login callback returns the same session payload contract as password login and must not fail on response-model conversion.
+- When `google_oauth_redirect_uri` is configured, Google app login uses that callback URI for both the authorization redirect and the token exchange. Otherwise it falls back to `app_public_url + /api/auth/google/callback`.
 
 ## Key workflows
 

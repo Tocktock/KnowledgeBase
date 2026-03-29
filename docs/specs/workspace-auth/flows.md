@@ -5,7 +5,7 @@
 1. The user reaches `/login` directly or via an anonymous protected action.
 2. The page preserves `return_to`, `post_auth_action`, `owner_scope`, and `provider`.
 3. The user signs in through Google or password.
-4. The backend returns `AuthSessionResponse`.
+4. The backend returns `AuthCallbackResponse` for Google login and `AuthSessionResponse` for password-based flows.
 5. The frontend resumes the requested destination:
    - normal login returns to `return_to`
    - connector login resumes the provider OAuth flow

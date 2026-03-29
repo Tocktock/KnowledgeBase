@@ -171,7 +171,7 @@ async def get_workspace_overview(
     latest_validation_run = None
     review_required_count = 0
 
-    if auth_user is None or auth_user.current_workspace_id is None:
+    if auth_user is None:
         return WorkspaceOverviewResponse(
             authenticated=False,
             featured_docs=featured_docs,
@@ -181,6 +181,22 @@ async def get_workspace_overview(
                 "로그인하고 워크스페이스 지식 레이어를 시작하세요.",
                 "구성원은 연결 구조를 몰라도 검색과 문서 탐색으로 바로 답을 찾을 수 있습니다.",
             ],
+        )
+
+    if auth_user.current_workspace_id is None:
+        return WorkspaceOverviewResponse(
+            authenticated=True,
+            workspace=None,
+            viewer_role=None,
+            can_manage_connectors=False,
+            featured_docs=[],
+            featured_concepts=[],
+            setup_state="workspace_access_required",
+            next_actions=[
+                "워크스페이스 관리자에게 초대 링크를 요청하세요.",
+                "초대를 수락하면 검색, 문서, 핵심 개념 화면이 워크스페이스 기준으로 활성화됩니다.",
+            ],
+            recent_sync_issues=[],
         )
 
     workspace_id = auth_user.current_workspace_id
@@ -230,8 +246,8 @@ async def get_workspace_overview(
         (
             await session.execute(
                 select(func.count(KnowledgeConcept.id)).where(KnowledgeConcept.review_required.is_(True))
-            ).scalar_one()
-        )
+            )
+        ).scalar_one()
     )
 
     healthy_source_count = sum(

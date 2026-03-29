@@ -41,6 +41,7 @@ The product is framed as a workspace knowledge layer. Navigation and home behavi
 ## Home behavior
 
 - Anonymous home explains the product as a workspace knowledge layer and routes users to `/login`.
+- Signed-in users without a workspace membership must not be rendered as anonymous visitors. Home shows a dedicated "workspace access required" state instead of the anonymous login CTA.
 - Member home prioritizes search, recommended knowledge, and trust signals.
 - Admin home includes the member value blocks plus setup and health summaries for sources, sync, and review workload.
 

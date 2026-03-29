@@ -68,7 +68,19 @@ export function WorkspaceHomePage() {
 
   const overview = overviewQuery.data
   const isAnonymous = !overview.authenticated
-  const isAdmin = overview.can_manage_connectors
+  const needsWorkspaceAccess = overview.authenticated && !overview.workspace
+  const isAdmin = !needsWorkspaceAccess && overview.can_manage_connectors
+
+  const heroTitle = isAnonymous
+    ? '흩어진 팀 문서를 신뢰 가능한 워크스페이스 지식으로 바꿉니다.'
+    : needsWorkspaceAccess
+      ? '로그인은 완료됐지만 워크스페이스 초대가 필요합니다.'
+      : '흩어진 팀 문서를 신뢰 가능한 워크스페이스 지식으로 바꿉니다.'
+  const heroDescription = isAnonymous
+    ? '관리자는 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 검색과 문서 탐색만으로 최신 지식을 바로 찾습니다. 연결 구조나 동기화 내부를 이해할 필요는 없습니다.'
+    : needsWorkspaceAccess
+      ? '이 계정은 아직 워크스페이스 멤버십이 없습니다. 관리자에게 초대 링크를 요청하고 수락을 완료하면 검색, 문서, 핵심 개념 화면이 워크스페이스 기준으로 전환됩니다.'
+      : '관리자는 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 검색과 문서 탐색만으로 최신 지식을 바로 찾습니다. 연결 구조나 동기화 내부를 이해할 필요는 없습니다.'
 
   return (
     <div className="space-y-8">
@@ -79,13 +91,13 @@ export function WorkspaceHomePage() {
               <Badge>Workspace Knowledge Layer</Badge>
               {!isAnonymous && overview.workspace ? <Badge>{overview.workspace.name}</Badge> : null}
               {!isAnonymous && overview.viewer_role ? <Badge>{overview.viewer_role}</Badge> : null}
+              {needsWorkspaceAccess ? <Badge>워크스페이스 초대 필요</Badge> : null}
             </div>
             <h1 className="text-4xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">
-              흩어진 팀 문서를 신뢰 가능한 워크스페이스 지식으로 바꿉니다.
+              {heroTitle}
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-neutral-600 dark:text-neutral-400">
-              관리자는 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 검색과 문서 탐색만으로 최신 지식을 바로 찾습니다.
-              연결 구조나 동기화 내부를 이해할 필요는 없습니다.
+              {heroDescription}
             </p>
             <div className="mt-5 flex flex-wrap gap-3">
               {isAnonymous ? (
@@ -97,6 +109,10 @@ export function WorkspaceHomePage() {
                     데이터 소스 보기
                   </Button>
                 </>
+              ) : needsWorkspaceAccess ? (
+                <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+                  데이터 소스 보기
+                </Button>
               ) : (
                 <>
                   <Button onClick={() => window.location.assign('/search')}>
@@ -117,7 +133,13 @@ export function WorkspaceHomePage() {
 
           <div className="space-y-3 rounded-3xl border border-neutral-200 bg-white/70 p-5 dark:border-neutral-800 dark:bg-neutral-950/60">
             <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-              {isAnonymous ? '이 제품이 하는 일' : isAdmin ? '워크스페이스 상태' : '바로 할 수 있는 일'}
+              {isAnonymous
+                ? '이 제품이 하는 일'
+                : needsWorkspaceAccess
+                  ? '다음 단계'
+                  : isAdmin
+                    ? '워크스페이스 상태'
+                    : '바로 할 수 있는 일'}
             </div>
             <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
               {isAnonymous ? (
@@ -125,6 +147,12 @@ export function WorkspaceHomePage() {
                   <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">1. 관리자가 팀 데이터 소스를 연결합니다.</div>
                   <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">2. 문서가 자동으로 동기화되어 검색과 개념 레이어에 반영됩니다.</div>
                   <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">3. 구성원은 검색과 문서 탐색만으로 답을 찾습니다.</div>
+                </>
+              ) : needsWorkspaceAccess ? (
+                <>
+                  <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">1. 워크스페이스 관리자에게 초대 링크를 요청합니다.</div>
+                  <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">2. 받은 초대 링크를 열어 멤버십을 수락합니다.</div>
+                  <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">3. 수락이 끝나면 홈, 검색, 문서, 핵심 개념 화면이 워크스페이스 기준으로 전환됩니다.</div>
                 </>
               ) : isAdmin ? (
                 <>
@@ -210,67 +238,85 @@ export function WorkspaceHomePage() {
         </Card>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_420px]">
+      {needsWorkspaceAccess ? (
         <Card className="p-6">
-          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-            <BookOpenText className="size-4 text-blue-500" /> 추천 문서
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+            <CheckCircle2 className="size-4 text-blue-500" /> 로그인 상태
           </div>
-          <div className="space-y-3">
-            {overview.featured_docs.map((document) => (
-              <Link key={document.id} href={`/docs/${document.slug}`} className="block rounded-2xl border border-neutral-200 px-4 py-4 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:border-neutral-800 dark:hover:border-blue-900">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <div className="font-medium text-neutral-900 dark:text-neutral-50">{document.title}</div>
-                  <Badge>{formatDocTypeLabel(document.doc_type)}</Badge>
-                </div>
-                <TrustBadges trust={document.trust} />
-                <p className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">{sentence(document.excerpt, 200)}</p>
-                <div className="mt-3 text-xs text-neutral-400">
-                  마지막 갱신 {formatDate(document.trust.last_synced_at ?? document.updated_at)}
-                </div>
-              </Link>
+          <div className="text-sm leading-7 text-neutral-600 dark:text-neutral-400">
+            로그인은 완료됐지만 아직 이 계정에 연결된 워크스페이스가 없습니다. 초대 수락이 끝나면 검색, 문서, 핵심 개념, 지식 검수 화면이 현재 워크스페이스 기준으로 활성화됩니다.
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {overview.next_actions.map((item) => (
+              <div key={item} className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm leading-7 text-neutral-600 dark:border-neutral-800 dark:text-neutral-400">
+                {item}
+              </div>
             ))}
           </div>
         </Card>
-
-        <div className="space-y-6">
+      ) : (
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_420px]">
           <Card className="p-6">
             <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-              <BookMarked className="size-4 text-blue-500" /> 핵심 개념
+              <BookOpenText className="size-4 text-blue-500" /> 추천 문서
             </div>
             <div className="space-y-3">
-              {overview.featured_concepts.map((concept) => (
-                <Link key={concept.id} href={`/glossary/${concept.slug}`} className="block rounded-2xl border border-neutral-200 px-4 py-4 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:border-neutral-800 dark:hover:border-blue-900">
+              {overview.featured_docs.map((document) => (
+                <Link key={document.id} href={`/docs/${document.slug}`} className="block rounded-2xl border border-neutral-200 px-4 py-4 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:border-neutral-800 dark:hover:border-blue-900">
                   <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <div className="font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
-                    <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
+                    <div className="font-medium text-neutral-900 dark:text-neutral-50">{document.title}</div>
+                    <Badge>{formatDocTypeLabel(document.doc_type)}</Badge>
                   </div>
-                  <TrustBadges trust={concept.trust} />
-                  <div className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
-                    근거 문서 {concept.support_doc_count}개 · 별칭 {concept.aliases.slice(0, 4).join(', ') || '없음'}
+                  <TrustBadges trust={document.trust} />
+                  <p className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">{sentence(document.excerpt, 200)}</p>
+                  <div className="mt-3 text-xs text-neutral-400">
+                    마지막 갱신 {formatDate(document.trust.last_synced_at ?? document.updated_at)}
                   </div>
                 </Link>
               ))}
             </div>
           </Card>
 
-          <Card className="p-6">
-            <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-              <Workflow className="size-4 text-blue-500" /> 연결된 데이터가 만드는 효과
-            </div>
-            <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
-              <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">
-                검색 결과는 출처와 최신성 정보를 함께 보여 줍니다.
+          <div className="space-y-6">
+            <Card className="p-6">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+                <BookMarked className="size-4 text-blue-500" /> 핵심 개념
               </div>
-              <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">
-                핵심 개념은 반복되는 팀 용어를 정리해 문서를 더 쉽게 재사용하게 합니다.
+              <div className="space-y-3">
+                {overview.featured_concepts.map((concept) => (
+                  <Link key={concept.id} href={`/glossary/${concept.slug}`} className="block rounded-2xl border border-neutral-200 px-4 py-4 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:border-neutral-800 dark:hover:border-blue-900">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <div className="font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
+                      <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
+                    </div>
+                    <TrustBadges trust={concept.trust} />
+                    <div className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
+                      근거 문서 {concept.support_doc_count}개 · 별칭 {concept.aliases.slice(0, 4).join(', ') || '없음'}
+                    </div>
+                  </Link>
+                ))}
               </div>
-              <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">
-                관리자는 연결 상태만 관리하고, 구성원은 문서 탐색과 검색에 집중합니다.
+            </Card>
+
+            <Card className="p-6">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+                <Workflow className="size-4 text-blue-500" /> 연결된 데이터가 만드는 효과
               </div>
-            </div>
-          </Card>
+              <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
+                <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">
+                  검색 결과는 출처와 최신성 정보를 함께 보여 줍니다.
+                </div>
+                <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">
+                  핵심 개념은 반복되는 팀 용어를 정리해 문서를 더 쉽게 재사용하게 합니다.
+                </div>
+                <div className="rounded-2xl bg-neutral-50 px-4 py-3 dark:bg-neutral-900">
+                  관리자는 연결 상태만 관리하고, 구성원은 문서 탐색과 검색에 집중합니다.
+                </div>
+              </div>
+            </Card>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

@@ -6,15 +6,17 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.deps import get_optional_authenticated_user
+from app.api.deps import get_authenticated_user, get_optional_authenticated_user
 from app.api.routes import auth as auth_route
 from app.api.routes import connectors as connectors_route
 from app.db.engine import get_db_session
 from app.main import app
 from app.schemas.auth import OAuthStartResponse
-from app.schemas.connectors import ConnectorReadinessResponse
+from app.schemas.connectors import ConnectorOAuthCallbackResponse, ConnectorReadinessResponse
 from app.services.auth import AuthenticatedUser
 from app.services.connectors import (
+    ConnectorError,
+    ConnectorForbiddenError,
     _default_sync_schedule_for_scope,
     _github_doc_path_supported,
     _resource_supports_connector_sync,
@@ -85,6 +87,57 @@ async def test_start_google_auth_route_accepts_post_auth_provider_action(monkeyp
         "provider": "notion",
     }
     assert response.json()["authorization_url"] == "https://accounts.example.test/auth"
+
+
+@pytest.mark.asyncio
+async def test_start_provider_oauth_route_maps_workspace_admin_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_user = make_auth_user(role="member")
+
+    async def override_session():
+        yield object()
+
+    async def fake_start_provider_oauth(*_args, **_kwargs):
+        raise ConnectorForbiddenError("Workspace admin permission required.")
+
+    monkeypatch.setattr(connectors_route, "start_provider_oauth", fake_start_provider_oauth)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/v1/connectors/google-drive/oauth/start", params={"owner_scope": "workspace"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Workspace admin permission required."}
+
+
+@pytest.mark.asyncio
+async def test_complete_provider_oauth_route_maps_invalid_state_to_bad_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_user = make_auth_user(role="owner")
+
+    async def override_session():
+        yield object()
+
+    async def fake_complete_provider_oauth(*_args, **_kwargs) -> ConnectorOAuthCallbackResponse:
+        raise ConnectorError("Connector OAuth state is invalid or expired.")
+
+    monkeypatch.setattr(connectors_route, "complete_provider_oauth", fake_complete_provider_oauth)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/v1/connectors/google-drive/oauth/callback",
+            params={"state": "bad-state", "code": "code-123"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Connector OAuth state is invalid or expired."}
 
 
 @pytest.mark.asyncio
