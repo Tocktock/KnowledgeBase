@@ -94,6 +94,7 @@ async def _upsert_document(
             language_code=payload.language_code,
             doc_type=payload.doc_type,
             status=payload.status,
+            visibility_scope=payload.visibility_scope,
             owner_team=payload.owner_team,
             meta=payload.metadata,
             current_revision_id=None,
@@ -117,6 +118,7 @@ async def _upsert_document(
     document.language_code = payload.language_code
     document.doc_type = payload.doc_type
     document.status = payload.status
+    document.visibility_scope = payload.visibility_scope
     document.owner_team = payload.owner_team
     document.meta = payload.metadata
     document.last_ingested_at = utcnow()

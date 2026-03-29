@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_authenticated_user
 from app.core.utils import utcnow
 from app.db.engine import get_db_session
 from app.db.models import GlossaryJob, GlossaryJobKind, GlossaryJobScope, JobStatus
@@ -14,15 +15,22 @@ from app.schemas.glossary import (
     GlossaryConceptUpdateRequest,
     GlossaryDraftRequest,
     GlossaryRefreshRequest,
+    GlossaryValidationRunCreateRequest,
+    GlossaryValidationRunListResponse,
+    GlossaryValidationRunSummary,
 )
 from app.schemas.jobs import JobSummary
+from app.services.auth import AuthenticatedUser
 from app.services.glossary import (
     GlossaryError,
     GlossaryNotFoundError,
+    create_glossary_validation_run,
     create_or_regenerate_glossary_draft,
     enqueue_glossary_refresh_job,
+    get_glossary_validation_run,
     get_glossary_concept_by_slug,
     get_glossary_concept_detail,
+    list_glossary_validation_runs,
     list_glossary_concepts,
     update_glossary_concept,
 )
@@ -41,15 +49,71 @@ def _glossary_job_summary(job: GlossaryJob) -> JobSummary:
     )
 
 
+def _require_workspace_glossary_manager(auth_user: AuthenticatedUser) -> None:
+    if auth_user.current_workspace_id is None or not auth_user.can_manage_workspace_connectors:
+        raise HTTPException(status_code=403, detail="Glossary validation runs require a workspace owner or admin.")
+
+
 @router.post("/refresh", response_model=JobSummary, status_code=status.HTTP_202_ACCEPTED)
 async def refresh_glossary_route(
     payload: GlossaryRefreshRequest,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> JobSummary:
+    _require_workspace_glossary_manager(auth_user)
     job = await enqueue_glossary_refresh_job(session, scope=payload.scope)
     await session.commit()
     await session.refresh(job)
     return _glossary_job_summary(job)
+
+
+@router.post("/validation-runs", response_model=GlossaryValidationRunSummary, status_code=status.HTTP_202_ACCEPTED)
+async def create_glossary_validation_run_route(
+    payload: GlossaryValidationRunCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> GlossaryValidationRunSummary:
+    _require_workspace_glossary_manager(auth_user)
+    try:
+        return await create_glossary_validation_run(
+            session,
+            workspace_id=auth_user.current_workspace_id,
+            requested_by_user_id=auth_user.user.id,
+            payload=payload,
+        )
+    except GlossaryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/validation-runs", response_model=GlossaryValidationRunListResponse)
+async def list_glossary_validation_runs_route(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> GlossaryValidationRunListResponse:
+    _require_workspace_glossary_manager(auth_user)
+    return await list_glossary_validation_runs(
+        session,
+        workspace_id=auth_user.current_workspace_id,
+        limit=limit,
+    )
+
+
+@router.get("/validation-runs/{run_id}", response_model=GlossaryValidationRunSummary)
+async def get_glossary_validation_run_route(
+    run_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> GlossaryValidationRunSummary:
+    _require_workspace_glossary_manager(auth_user)
+    try:
+        return await get_glossary_validation_run(
+            session,
+            workspace_id=auth_user.current_workspace_id,
+            run_id=run_id,
+        )
+    except GlossaryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("", response_model=GlossaryConceptListResponse)
@@ -100,7 +164,9 @@ async def create_glossary_draft_route(
     concept_id: UUID,
     payload: GlossaryDraftRequest,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> GlossaryConceptDetailResponse:
+    _require_workspace_glossary_manager(auth_user)
     job = GlossaryJob(
         kind=GlossaryJobKind.draft.value,
         scope=GlossaryJobScope.incremental.value,
@@ -157,7 +223,9 @@ async def update_glossary_route(
     concept_id: UUID,
     payload: GlossaryConceptUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> GlossaryConceptDetailResponse:
+    _require_workspace_glossary_manager(auth_user)
     try:
         return await update_glossary_concept(session, concept_id, payload)
     except GlossaryNotFoundError as exc:

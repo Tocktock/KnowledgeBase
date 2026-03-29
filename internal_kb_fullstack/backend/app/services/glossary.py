@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from hashlib import sha256
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from uuid import UUID
@@ -14,11 +15,20 @@ from app.db.models import (
     ConceptStatus,
     ConceptSupport,
     ConceptType,
+    ConnectorConnection,
+    ConnectorOwnerScope,
+    ConnectorResource,
+    ConnectorResourceStatus,
+    ConnectorSourceItem,
+    ConnectorSourceItemStatus,
     Document,
     DocumentChunk,
+    DocumentVisibilityScope,
     GlossaryJob,
     GlossaryJobKind,
     GlossaryJobScope,
+    GlossaryValidationRun,
+    GlossaryValidationState,
     JobStatus,
     KnowledgeConcept,
 )
@@ -30,6 +40,9 @@ from app.schemas.glossary import (
     GlossaryConceptUpdateRequest,
     GlossaryDraftRequest,
     GlossarySupportItem,
+    GlossaryValidationRunCreateRequest,
+    GlossaryValidationRunListResponse,
+    GlossaryValidationRunSummary,
 )
 from app.services.trust import build_concept_trust, build_document_trust
 
@@ -241,6 +254,27 @@ def _document_link(document: Document | None) -> GlossaryConceptDocumentLink | N
     )
 
 
+def _validation_run_summary(run: GlossaryValidationRun) -> GlossaryValidationRunSummary:
+    return GlossaryValidationRunSummary(
+        id=run.id,
+        workspace_id=run.workspace_id,
+        requested_by_user_id=run.requested_by_user_id,
+        mode=run.mode,
+        status=run.status,
+        target_concept_id=run.target_concept_id,
+        source_scope=run.source_scope,
+        selected_resource_ids=list(run.selected_resource_ids or []),
+        source_sync_summary=dict(run.source_sync_summary or {}),
+        validation_summary=dict(run.validation_summary or {}),
+        linked_job_ids=list(run.linked_job_ids or []),
+        error_message=run.error_message,
+        requested_at=run.requested_at,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        updated_at=run.updated_at,
+    )
+
+
 def _concept_summary(concept: KnowledgeConcept, docs_by_id: dict[UUID, Document]) -> GlossaryConceptSummary:
     canonical_document = docs_by_id.get(concept.canonical_document_id) if concept.canonical_document_id else None
     return GlossaryConceptSummary(
@@ -255,6 +289,11 @@ def _concept_summary(concept: KnowledgeConcept, docs_by_id: dict[UUID, Document]
         support_doc_count=concept.support_doc_count,
         support_chunk_count=concept.support_chunk_count,
         status=concept.status,
+        validation_state=concept.validation_state,
+        validation_reason=concept.validation_reason,
+        last_validated_at=concept.last_validated_at,
+        review_required=bool(concept.review_required),
+        last_validation_run_id=concept.last_validation_run_id,
         owner_team_hint=concept.owner_team_hint,
         source_system_mix=list(concept.source_system_mix or []),
         generated_document=_document_link(docs_by_id.get(concept.generated_document_id)) if concept.generated_document_id else None,
@@ -303,6 +342,14 @@ async def list_glossary_concepts(
         select(KnowledgeConcept)
         .where(*filters)
         .order_by(
+            KnowledgeConcept.review_required.desc(),
+            case(
+                (KnowledgeConcept.validation_state == GlossaryValidationState.stale_evidence.value, 0),
+                (KnowledgeConcept.validation_state == GlossaryValidationState.missing_draft.value, 1),
+                (KnowledgeConcept.validation_state == GlossaryValidationState.needs_update.value, 2),
+                (KnowledgeConcept.validation_state == GlossaryValidationState.new_term.value, 3),
+                else_=4,
+            ).asc(),
             case(
                 (KnowledgeConcept.status == ConceptStatus.approved.value, 0),
                 (KnowledgeConcept.status == ConceptStatus.drafted.value, 1),
@@ -507,6 +554,7 @@ async def get_concept_support_hits(
     owner_team: str | None = None,
     doc_type: str | None = None,
     source_system: str | None = None,
+    include_evidence_only: bool = True,
 ) -> list[dict[str, object]]:
     filters = [ConceptSupport.concept_id == concept_id]
     if owner_team is not None:
@@ -515,6 +563,8 @@ async def get_concept_support_hits(
         filters.append(Document.doc_type == doc_type)
     if source_system is not None:
         filters.append(Document.source_system == source_system)
+    if not include_evidence_only:
+        filters.append(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
 
     stmt = (
         select(
@@ -571,7 +621,51 @@ async def get_concept_support_hits(
     return selected[:limit]
 
 
-async def refresh_glossary_concepts(session: AsyncSession) -> int:
+def _concept_terms(concept: KnowledgeConcept) -> set[str]:
+    return {
+        concept_search_key(value)
+        for value in [concept.normalized_term, concept.display_term, *(concept.aliases or [])]
+        if value
+    }
+
+
+def _candidate_signature(candidate: CandidateConcept) -> str | None:
+    if not candidate.supports:
+        return None
+    parts = [
+        "|".join(
+            [
+                str(support.document_id),
+                str(support.chunk_id or ""),
+                support.evidence_kind,
+                support.evidence_term,
+                f"{support.evidence_strength:.3f}",
+                support.support_group_key,
+            ]
+        )
+        for support in sorted(
+            candidate.supports.values(),
+            key=lambda item: (
+                item.document_id,
+                str(item.chunk_id or ""),
+                item.evidence_kind,
+                item.evidence_term,
+            ),
+        )
+    ]
+    return sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+async def _load_glossary_corpus_rows(
+    session: AsyncSession,
+    *,
+    document_ids: set[UUID] | None = None,
+) -> list[dict[str, object]]:
+    filters = [Document.status == "published", Document.source_system != "glossary"]
+    if document_ids is not None:
+        if not document_ids:
+            return []
+        filters.append(Document.id.in_(document_ids))
     stmt = (
         select(
             Document.id.label("document_id"),
@@ -583,21 +677,64 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
             Document.owner_team,
             Document.source_system,
             Document.language_code,
+            Document.visibility_scope,
             DocumentChunk.id.label("chunk_id"),
             DocumentChunk.section_title,
             DocumentChunk.heading_path,
             DocumentChunk.content_text,
         )
-        .join(DocumentChunk, (DocumentChunk.document_id == Document.id) & (DocumentChunk.revision_id == Document.current_revision_id))
-        .where(Document.status == "published", Document.source_system != "glossary")
+        .join(
+            DocumentChunk,
+            (DocumentChunk.document_id == Document.id) & (DocumentChunk.revision_id == Document.current_revision_id),
+        )
+        .where(*filters)
         .order_by(Document.id.asc(), DocumentChunk.chunk_index.asc())
     )
     rows = (await session.execute(stmt)).mappings().all()
+    return [dict(row) for row in rows]
 
+
+def _extract_term_keys_from_rows(rows: list[dict[str, object]]) -> set[str]:
+    keys: set[str] = set()
+    for row in rows:
+        document_title = normalize_concept_term(str(row["document_title"]))
+        if _is_valid_term(document_title):
+            keys.add(concept_search_key(document_title))
+        for heading_term in _heading_terms(row.get("section_title"), list(row.get("heading_path") or [])):
+            keys.add(concept_search_key(heading_term))
+        for table_term in _extract_table_terms(str(row.get("content_text") or "")):
+            keys.add(concept_search_key(table_term))
+    return {key for key in keys if key}
+
+
+async def _load_target_term_keys(session: AsyncSession, target_document_ids: set[UUID]) -> set[str]:
+    keys = _extract_term_keys_from_rows(await _load_glossary_corpus_rows(session, document_ids=target_document_ids))
+    linked_concepts = list(
+        (
+            await session.execute(
+                select(KnowledgeConcept)
+                .join(ConceptSupport, ConceptSupport.concept_id == KnowledgeConcept.id)
+                .where(ConceptSupport.document_id.in_(target_document_ids))
+            )
+        ).scalars().all()
+    )
+    for concept in linked_concepts:
+        keys.update(_concept_terms(concept))
+    return {key for key in keys if key}
+
+
+def _build_candidates(
+    rows: list[dict[str, object]],
+    *,
+    allowed_term_keys: set[str] | None = None,
+) -> dict[str, CandidateConcept]:
     candidates: dict[str, CandidateConcept] = {}
 
-    def ensure_candidate(term: str) -> CandidateConcept:
+    def ensure_candidate(term: str) -> CandidateConcept | None:
         normalized_term = normalize_concept_term(term)
+        search_key = concept_search_key(normalized_term)
+        if allowed_term_keys is not None and search_key not in allowed_term_keys:
+            return None
         candidate = candidates.get(normalized_term)
         if candidate is None:
             candidate = CandidateConcept(normalized_term=normalized_term)
@@ -619,30 +756,33 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
         title_term = normalize_concept_term(document_title)
         if _is_valid_term(title_term):
             candidate = ensure_candidate(title_term)
-            candidate.add_support(
-                display_term=title_term,
-                source_system=source_system,
-                support=CandidateSupport(
-                    document_id=document_id,
-                    revision_id=revision_id,
-                    chunk_id=chunk_id,
-                    document_slug=document_slug,
-                    document_title=document_title,
-                    document_status=document_status,
-                    document_doc_type=document_doc_type,
-                    owner_team=owner_team,
-                    support_group_key=group_key,
-                    evidence_kind="title",
-                    evidence_term=title_term,
-                    support_text=document_title,
-                    evidence_strength=3.6,
-                ),
-            )
+            if candidate is not None:
+                candidate.add_support(
+                    display_term=title_term,
+                    source_system=source_system,
+                    support=CandidateSupport(
+                        document_id=document_id,
+                        revision_id=revision_id,
+                        chunk_id=chunk_id,
+                        document_slug=document_slug,
+                        document_title=document_title,
+                        document_status=document_status,
+                        document_doc_type=document_doc_type,
+                        owner_team=owner_team,
+                        support_group_key=group_key,
+                        evidence_kind="title",
+                        evidence_term=title_term,
+                        support_text=document_title,
+                        evidence_strength=3.6,
+                    ),
+                )
 
-        for heading_term in _heading_terms(row["section_title"], list(row["heading_path"] or [])):
+        for heading_term in _heading_terms(row.get("section_title"), list(row.get("heading_path") or [])):
             if concept_search_key(heading_term) == concept_search_key(title_term):
                 continue
             candidate = ensure_candidate(heading_term)
+            if candidate is None:
+                continue
             candidate.add_support(
                 display_term=heading_term,
                 source_system=source_system,
@@ -663,8 +803,10 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
                 ),
             )
 
-        for table_term in _extract_table_terms(str(row["content_text"])):
+        for table_term in _extract_table_terms(str(row.get("content_text") or "")):
             candidate = ensure_candidate(table_term)
+            if candidate is None:
+                continue
             candidate.add_support(
                 display_term=table_term,
                 source_system=source_system,
@@ -680,16 +822,80 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
                     support_group_key=group_key,
                     evidence_kind="table-field",
                     evidence_term=table_term,
-                    support_text=normalize_whitespace(str(row["content_text"]))[:240],
+                    support_text=normalize_whitespace(str(row.get("content_text") or ""))[:240],
                     evidence_strength=1.4,
                 ),
             )
+    return candidates
 
+
+def _validation_reason(
+    *,
+    state: str,
+    display_term: str,
+) -> str:
+    if state == GlossaryValidationState.ok.value:
+        return f"{display_term} 정의가 최신 근거와 일치합니다."
+    if state == GlossaryValidationState.stale_evidence.value:
+        return f"{display_term}의 근거 문서가 바뀌었습니다. 현재 승인 문서는 유지하되 다시 검토해야 합니다."
+    if state == GlossaryValidationState.missing_draft.value:
+        return f"{display_term}는 근거는 충분하지만 작업 초안이 아직 없습니다."
+    if state == GlossaryValidationState.needs_update.value:
+        return f"{display_term}의 근거가 바뀌어 작업 초안을 갱신해야 합니다."
+    return f"{display_term}는 새로 발견된 용어 후보입니다."
+
+
+async def _apply_glossary_refresh(
+    session: AsyncSession,
+    *,
+    mode: str,
+    target_document_ids: set[UUID] | None = None,
+    target_concept_id: UUID | None = None,
+    validation_run_id: UUID | None = None,
+    create_drafts_for_review: bool = False,
+) -> dict[str, object]:
+    if mode == GlossaryJobScope.incremental.value and not target_document_ids:
+        return {
+            "updated_concepts": 0,
+            "validated_concepts": 0,
+            "created_drafts": 0,
+            "review_required_count": 0,
+            "validation_counts": {},
+            "target_document_count": 0,
+        }
+
+    allowed_term_keys: set[str] | None = None
+    if mode == GlossaryJobScope.incremental.value:
+        allowed_term_keys = await _load_target_term_keys(session, target_document_ids or set())
+        if not allowed_term_keys:
+            return {
+                "updated_concepts": 0,
+                "validated_concepts": 0,
+                "created_drafts": 0,
+                "review_required_count": 0,
+                "validation_counts": {},
+                "target_document_count": len(target_document_ids or set()),
+            }
+    elif mode == GlossaryJobScope.term.value:
+        if target_concept_id is None:
+            raise GlossaryError("target_concept_id is required for term validation.")
+        target_concept = await _get_concept_or_raise(session, target_concept_id)
+        allowed_term_keys = _concept_terms(target_concept)
+
+    rows = await _load_glossary_corpus_rows(session)
+    candidates = _build_candidates(rows, allowed_term_keys=allowed_term_keys)
     existing_concepts = {
         concept.normalized_term: concept
         for concept in (await session.execute(select(KnowledgeConcept))).scalars().all()
     }
+    targeted_keys = allowed_term_keys or {
+        concept_search_key(term)
+        for term in {*(candidates.keys()), *existing_concepts.keys()}
+        if term
+    }
+    validation_counts: Counter[str] = Counter()
     updated_concept_ids: list[UUID] = []
+    draft_concept_ids: list[UUID] = []
 
     for normalized_term, candidate in candidates.items():
         display_term = _display_term_for_candidate(candidate)
@@ -702,6 +908,11 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
 
         concept = existing_concepts.get(normalized_term)
         next_status = ConceptStatus.ignored.value if auto_ignored else ConceptStatus.suggested.value
+        previous_signature = concept.evidence_signature if concept is not None else None
+        signature = _candidate_signature(candidate)
+        drifted = previous_signature is not None and signature is not None and previous_signature != signature
+        is_new = concept is None
+
         if concept is None:
             concept = KnowledgeConcept(
                 normalized_term=normalized_term,
@@ -713,6 +924,15 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
                 support_doc_count=support_doc_count,
                 support_chunk_count=support_chunk_count,
                 status=next_status,
+                validation_state=GlossaryValidationState.new_term.value,
+                validation_reason=_validation_reason(
+                    state=GlossaryValidationState.new_term.value,
+                    display_term=display_term,
+                ),
+                evidence_signature=signature,
+                last_validation_run_id=validation_run_id,
+                last_validated_at=utcnow(),
+                review_required=True,
                 owner_team_hint=candidate.owner_teams.most_common(1)[0][0] if candidate.owner_teams else None,
                 source_system_mix=sorted(candidate.source_systems),
                 meta={"auto_ignored": auto_ignored},
@@ -740,9 +960,38 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
                 concept.status = ConceptStatus.drafted.value
             if concept.canonical_document_id:
                 concept.status = ConceptStatus.approved.value
+
+            if concept.status == ConceptStatus.ignored.value:
+                concept.validation_state = GlossaryValidationState.ok.value
+                concept.review_required = False
+            elif concept.status == ConceptStatus.approved.value:
+                concept.validation_state = (
+                    GlossaryValidationState.stale_evidence.value if drifted else GlossaryValidationState.ok.value
+                )
+                concept.review_required = drifted
+            elif is_new:
+                concept.validation_state = GlossaryValidationState.new_term.value
+                concept.review_required = True
+            elif concept.generated_document_id is None:
+                concept.validation_state = GlossaryValidationState.missing_draft.value
+                concept.review_required = True
+            else:
+                concept.validation_state = GlossaryValidationState.needs_update.value
+                concept.review_required = True
+
+            concept.validation_reason = _validation_reason(
+                state=concept.validation_state,
+                display_term=display_term,
+            )
+            concept.evidence_signature = signature
+            concept.last_validation_run_id = validation_run_id
+            concept.last_validated_at = utcnow()
             await session.flush()
 
         updated_concept_ids.append(concept.id)
+        validation_counts[concept.validation_state] += 1
+        if create_drafts_for_review and concept.review_required and concept.status == ConceptStatus.approved.value:
+            draft_concept_ids.append(concept.id)
         await session.execute(delete(ConceptSupport).where(ConceptSupport.concept_id == concept.id))
 
         supports = sorted(candidate.supports.values(), key=lambda item: item.evidence_strength, reverse=True)[:48]
@@ -762,14 +1011,81 @@ async def refresh_glossary_concepts(session: AsyncSession) -> int:
                 )
             )
 
-    active_normalized_terms = {normalized_term for normalized_term, candidate in candidates.items() if len(candidate.document_ids) >= 1}
-    for normalized_term, concept in existing_concepts.items():
-        if normalized_term not in active_normalized_terms and concept.status != ConceptStatus.ignored.value:
-            concept.status = ConceptStatus.stale.value
-            concept.refreshed_at = utcnow()
+    active_keys = {
+        concept_search_key(normalized_term)
+        for normalized_term, candidate in candidates.items()
+        if len(candidate.document_ids) >= 1
+    }
+    for concept in existing_concepts.values():
+        concept_keys = _concept_terms(concept)
+        if not concept_keys.intersection(targeted_keys):
+            continue
+        if concept.normalized_term in candidates or concept_keys.intersection(active_keys):
+            continue
+        if concept.status == ConceptStatus.ignored.value:
+            continue
+        concept.status = ConceptStatus.stale.value
+        concept.validation_state = GlossaryValidationState.stale_evidence.value
+        concept.validation_reason = _validation_reason(
+            state=GlossaryValidationState.stale_evidence.value,
+            display_term=concept.display_term,
+        )
+        concept.last_validation_run_id = validation_run_id
+        concept.last_validated_at = utcnow()
+        concept.review_required = True
+        concept.refreshed_at = utcnow()
+        updated_concept_ids.append(concept.id)
+        validation_counts[concept.validation_state] += 1
+        if create_drafts_for_review and concept.canonical_document_id is not None:
+            draft_concept_ids.append(concept.id)
 
     await session.flush()
-    return len(updated_concept_ids)
+
+    created_drafts = 0
+    if create_drafts_for_review:
+        for concept_id in list(dict.fromkeys(draft_concept_ids)):
+            try:
+                await create_or_regenerate_glossary_draft(
+                    session,
+                    concept_id,
+                    GlossaryDraftRequest(regenerate=True),
+                    commit=False,
+                )
+                created_drafts += 1
+            except GlossaryError:
+                continue
+
+    review_required_count = int(
+        (
+            await session.execute(
+                select(func.count(KnowledgeConcept.id)).where(KnowledgeConcept.review_required.is_(True))
+            )
+        ).scalar_one()
+    )
+    await session.flush()
+    return {
+        "updated_concepts": len(updated_concept_ids),
+        "validated_concepts": sum(validation_counts.values()),
+        "created_drafts": created_drafts,
+        "review_required_count": review_required_count,
+        "validation_counts": dict(validation_counts),
+        "target_document_count": len(target_document_ids or set()),
+    }
+
+
+async def refresh_glossary_concepts(
+    session: AsyncSession,
+    *,
+    scope: str = GlossaryJobScope.full.value,
+    target_document_id: UUID | None = None,
+) -> int:
+    summary = await _apply_glossary_refresh(
+        session,
+        mode=GlossaryJobScope.incremental.value if scope == GlossaryJobScope.incremental.value else GlossaryJobScope.full.value,
+        target_document_ids={target_document_id} if target_document_id is not None else None,
+        create_drafts_for_review=False,
+    )
+    return int(summary["updated_concepts"])
 
 
 async def update_glossary_concept(
@@ -911,6 +1227,26 @@ async def update_glossary_concept(
     else:
         raise GlossaryError(f"Unsupported glossary action: {payload.action}")
 
+    if concept.status == ConceptStatus.approved.value:
+        concept.validation_state = GlossaryValidationState.ok.value
+        concept.review_required = False
+    elif concept.status == ConceptStatus.ignored.value:
+        concept.validation_state = GlossaryValidationState.ok.value
+        concept.review_required = False
+    elif concept.status == ConceptStatus.stale.value:
+        concept.validation_state = GlossaryValidationState.stale_evidence.value
+        concept.review_required = True
+    elif concept.generated_document_id is None:
+        concept.validation_state = GlossaryValidationState.missing_draft.value
+        concept.review_required = True
+    else:
+        concept.validation_state = GlossaryValidationState.needs_update.value
+        concept.review_required = True
+    concept.validation_reason = _validation_reason(
+        state=concept.validation_state,
+        display_term=concept.display_term,
+    )
+    concept.last_validated_at = utcnow()
     concept.updated_at = utcnow()
     concept.refreshed_at = utcnow()
     await session.commit()
@@ -921,6 +1257,8 @@ async def create_or_regenerate_glossary_draft(
     session: AsyncSession,
     concept_id: UUID,
     payload: GlossaryDraftRequest,
+    *,
+    commit: bool = True,
 ) -> GlossaryConceptDetailResponse:
     concept = await _get_concept_or_raise(session, concept_id)
     if concept.generated_document_id is not None and not payload.regenerate:
@@ -970,9 +1308,19 @@ async def create_or_regenerate_glossary_draft(
     concept.generated_document_id = result.document.id
     if concept.status != ConceptStatus.approved.value:
         concept.status = ConceptStatus.drafted.value
+    if concept.status == ConceptStatus.approved.value:
+        concept.validation_state = GlossaryValidationState.stale_evidence.value
+        concept.review_required = True
+        concept.validation_reason = _validation_reason(
+            state=GlossaryValidationState.stale_evidence.value,
+            display_term=concept.display_term,
+        )
     concept.updated_at = utcnow()
     concept.refreshed_at = utcnow()
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return await get_glossary_concept_detail(session, concept.id)
 
 
@@ -1010,3 +1358,231 @@ async def enqueue_glossary_refresh_job(
     session.add(job)
     await session.flush()
     return job
+
+
+async def create_glossary_validation_run(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    requested_by_user_id: UUID | None,
+    payload: GlossaryValidationRunCreateRequest,
+) -> GlossaryValidationRunSummary:
+    if payload.mode == "validate_term" and payload.target_concept_id is None:
+        raise GlossaryError("target_concept_id is required for term validation.")
+    from app.services.connectors import enqueue_connector_sync_job, _resource_supports_connector_sync
+
+    resource_stmt = (
+        select(ConnectorResource)
+        .join(ConnectorConnection, ConnectorConnection.id == ConnectorResource.connection_id)
+        .where(
+            ConnectorConnection.workspace_id == workspace_id,
+            ConnectorConnection.owner_scope == ConnectorOwnerScope.workspace.value,
+            ConnectorResource.status == ConnectorResourceStatus.active.value,
+        )
+    )
+    if payload.connector_resource_ids:
+        resource_stmt = resource_stmt.where(ConnectorResource.id.in_(payload.connector_resource_ids))
+    resources = list((await session.execute(resource_stmt)).scalars().all())
+    syncable_resources = [resource for resource in resources if _resource_supports_connector_sync(resource)]
+    snapshot_resources = [resource for resource in resources if not _resource_supports_connector_sync(resource)]
+
+    run = GlossaryValidationRun(
+        workspace_id=workspace_id,
+        requested_by_user_id=requested_by_user_id,
+        mode=payload.mode,
+        status=JobStatus.queued.value,
+        target_concept_id=payload.target_concept_id,
+        source_scope="selected_resources" if payload.connector_resource_ids else "workspace_active",
+        selected_resource_ids=[str(resource.id) for resource in resources],
+        source_sync_summary={
+            "selected_resource_count": len(resources),
+            "sync_requested": payload.mode != "validate_term",
+            "queued_sync_resource_count": 0,
+            "snapshot_resource_count": len(snapshot_resources),
+            "skipped_sync_resource_count": len(snapshot_resources),
+        },
+        validation_summary={},
+        linked_job_ids=[],
+        requested_at=utcnow(),
+    )
+    session.add(run)
+    await session.flush()
+
+    linked_job_ids: list[str] = []
+    if payload.mode != "validate_term":
+        for resource in syncable_resources:
+            sync_job = await enqueue_connector_sync_job(
+                session,
+                resource.connection_id,
+                resource.id,
+                sync_mode=resource.sync_mode,
+                priority=70,
+            )
+            linked_job_ids.append(str(sync_job.id))
+        run.source_sync_summary = {
+            **(run.source_sync_summary or {}),
+            "queued_sync_resource_count": len(syncable_resources),
+        }
+
+    glossary_job = GlossaryJob(
+        kind=GlossaryJobKind.validation_run.value,
+        scope=(
+            GlossaryJobScope.term.value
+            if payload.mode == "validate_term"
+            else GlossaryJobScope.incremental.value
+            if payload.mode == "sync_validate_impacted"
+            else GlossaryJobScope.full.value
+        ),
+        status=JobStatus.queued.value,
+        target_concept_id=payload.target_concept_id,
+        priority=140,
+        attempt_count=0,
+        payload={"run_id": str(run.id)},
+        requested_at=utcnow(),
+    )
+    session.add(glossary_job)
+    await session.flush()
+    linked_job_ids.append(str(glossary_job.id))
+    run.linked_job_ids = linked_job_ids
+    await session.commit()
+    await session.refresh(run)
+    return _validation_run_summary(run)
+
+
+async def list_glossary_validation_runs(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    limit: int = 20,
+) -> GlossaryValidationRunListResponse:
+    runs = list(
+        (
+            await session.execute(
+                select(GlossaryValidationRun)
+                .where(GlossaryValidationRun.workspace_id == workspace_id)
+                .order_by(GlossaryValidationRun.requested_at.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+    )
+    return GlossaryValidationRunListResponse(items=[_validation_run_summary(run) for run in runs])
+
+
+async def get_glossary_validation_run(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    run_id: UUID,
+) -> GlossaryValidationRunSummary:
+    run = await session.get(GlossaryValidationRun, run_id)
+    if run is None or run.workspace_id != workspace_id:
+        raise GlossaryNotFoundError("Glossary validation run not found.")
+    return _validation_run_summary(run)
+
+
+async def execute_glossary_validation_run(session: AsyncSession, run_id: UUID) -> GlossaryValidationRunSummary:
+    run = await session.get(GlossaryValidationRun, run_id)
+    if run is None:
+        raise GlossaryNotFoundError("Glossary validation run not found.")
+
+    run.status = JobStatus.processing.value
+    run.started_at = utcnow()
+    run.updated_at = utcnow()
+    await session.flush()
+
+    try:
+        from app.services.connectors import _resource_supports_connector_sync
+
+        selected_resource_ids = [UUID(value) for value in (run.selected_resource_ids or [])]
+        target_document_ids: set[UUID] = set()
+        source_sync_summary = dict(run.source_sync_summary or {})
+        if run.mode != "validate_term" and selected_resource_ids:
+            selected_resources = list(
+                (
+                    await session.execute(select(ConnectorResource).where(ConnectorResource.id.in_(selected_resource_ids)))
+                ).scalars().all()
+            )
+            syncable_resource_ids = [
+                resource.id for resource in selected_resources if _resource_supports_connector_sync(resource)
+            ]
+            snapshot_resource_ids = [
+                resource.id for resource in selected_resources if not _resource_supports_connector_sync(resource)
+            ]
+            touched_items = list(
+                (
+                    await session.execute(
+                        select(ConnectorSourceItem)
+                        .where(
+                            ConnectorSourceItem.resource_id.in_(syncable_resource_ids or selected_resource_ids),
+                            ConnectorSourceItem.last_synced_at >= run.requested_at,
+                            ConnectorSourceItem.internal_document_id.is_not(None),
+                        )
+                    )
+                ).scalars().all()
+            )
+            target_document_ids = {
+                item.internal_document_id
+                for item in touched_items
+                if item.internal_document_id is not None
+            }
+            snapshot_document_ids: set[UUID] = set()
+            if run.mode == "sync_validate_impacted" and snapshot_resource_ids:
+                snapshot_items = list(
+                    (
+                        await session.execute(
+                            select(ConnectorSourceItem)
+                            .where(
+                                ConnectorSourceItem.resource_id.in_(snapshot_resource_ids),
+                                ConnectorSourceItem.internal_document_id.is_not(None),
+                                ConnectorSourceItem.item_status.in_(
+                                    [
+                                        ConnectorSourceItemStatus.imported.value,
+                                        ConnectorSourceItemStatus.unchanged.value,
+                                        ConnectorSourceItemStatus.failed.value,
+                                        ConnectorSourceItemStatus.unsupported.value,
+                                    ]
+                                ),
+                            )
+                        )
+                    ).scalars().all()
+                )
+                snapshot_document_ids = {
+                    item.internal_document_id
+                    for item in snapshot_items
+                    if item.internal_document_id is not None
+                }
+                target_document_ids.update(snapshot_document_ids)
+            source_sync_summary = {
+                **source_sync_summary,
+                "touched_source_item_count": len(touched_items),
+                "touched_document_count": len(target_document_ids),
+                "snapshot_document_count": len(snapshot_document_ids),
+            }
+
+        validation_summary = await _apply_glossary_refresh(
+            session,
+            mode=(
+                GlossaryJobScope.term.value
+                if run.mode == "validate_term"
+                else GlossaryJobScope.incremental.value
+                if run.mode == "sync_validate_impacted"
+                else GlossaryJobScope.full.value
+            ),
+            target_document_ids=target_document_ids or None,
+            target_concept_id=run.target_concept_id,
+            validation_run_id=run.id,
+            create_drafts_for_review=True,
+        )
+        run.source_sync_summary = source_sync_summary
+        run.validation_summary = dict(validation_summary)
+        run.status = JobStatus.completed.value
+        run.error_message = None
+        run.finished_at = utcnow()
+        await session.flush()
+        return _validation_run_summary(run)
+    except Exception as exc:  # noqa: BLE001
+        run.status = JobStatus.failed.value
+        run.error_message = str(exc)
+        run.finished_at = utcnow()
+        await session.flush()
+        raise

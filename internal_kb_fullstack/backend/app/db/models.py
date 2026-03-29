@@ -38,6 +38,11 @@ class DocumentStatus(str, enum.Enum):
     archived = "archived"
 
 
+class DocumentVisibilityScope(str, enum.Enum):
+    member_visible = "member_visible"
+    evidence_only = "evidence_only"
+
+
 class JobStatus(str, enum.Enum):
     queued = "queued"
     processing = "processing"
@@ -54,6 +59,14 @@ class ConceptStatus(str, enum.Enum):
     stale = "stale"
 
 
+class GlossaryValidationState(str, enum.Enum):
+    ok = "ok"
+    needs_update = "needs_update"
+    missing_draft = "missing_draft"
+    stale_evidence = "stale_evidence"
+    new_term = "new_term"
+
+
 class ConceptType(str, enum.Enum):
     term = "term"
     product = "product"
@@ -66,11 +79,13 @@ class ConceptType(str, enum.Enum):
 class GlossaryJobKind(str, enum.Enum):
     refresh = "refresh"
     draft = "draft"
+    validation_run = "validation_run"
 
 
 class GlossaryJobScope(str, enum.Enum):
     full = "full"
     incremental = "incremental"
+    term = "term"
 
 
 class UserStatus(str, enum.Enum):
@@ -91,6 +106,7 @@ class WorkspaceMembershipRole(str, enum.Enum):
 
 class ConnectorProvider(str, enum.Enum):
     google_drive = "google_drive"
+    github = "github"
     notion = "notion"
 
 
@@ -114,8 +130,11 @@ class ConnectorOAuthPurpose(str, enum.Enum):
 class ConnectorResourceKind(str, enum.Enum):
     folder = "folder"
     shared_drive = "shared_drive"
+    repository_docs = "repository_docs"
+    repository_evidence = "repository_evidence"
     page = "page"
     database = "database"
+    export_upload = "export_upload"
 
 
 class ConnectorResourceStatus(str, enum.Enum):
@@ -162,6 +181,11 @@ class Document(Base):
     language_code: Mapped[str] = mapped_column(String(12), nullable=False, server_default="ko")
     doc_type: Mapped[str] = mapped_column(String(50), nullable=False, server_default="knowledge")
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=DocumentStatus.published.value)
+    visibility_scope: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=DocumentVisibilityScope.member_visible.value,
+    )
     owner_team: Mapped[str | None] = mapped_column(Text(), nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     current_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
@@ -332,6 +356,12 @@ class ConnectorResource(Base):
     resource_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
     parent_external_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
     sync_children: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="true")
+    visibility_scope: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=DocumentVisibilityScope.member_visible.value,
+    )
+    selection_mode: Mapped[str] = mapped_column(String(30), nullable=False, server_default="browse")
     sync_mode: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorSyncMode.manual.value)
     sync_interval_minutes: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConnectorResourceStatus.active.value)
@@ -545,6 +575,20 @@ class KnowledgeConcept(Base):
     support_doc_count: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="0")
     support_chunk_count: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="0")
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=ConceptStatus.suggested.value)
+    validation_state: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        server_default=GlossaryValidationState.new_term.value,
+    )
+    validation_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    evidence_signature: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    last_validation_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("glossary_validation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_required: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="false")
     owner_team_hint: Mapped[str | None] = mapped_column(Text(), nullable=True)
     source_system_mix: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     generated_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
@@ -570,6 +614,39 @@ class ConceptSupport(Base):
     evidence_strength: Mapped[float] = mapped_column(nullable=False, server_default="0")
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class GlossaryValidationRun(Base):
+    __tablename__ = "glossary_validation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    mode: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=JobStatus.queued.value)
+    target_concept_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_concepts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_scope: Mapped[str] = mapped_column(String(30), nullable=False, server_default="workspace_active")
+    selected_resource_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    source_sync_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    validation_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    linked_job_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    error_message: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class GlossaryJob(Base):
@@ -603,6 +680,11 @@ Index("ix_connector_oauth_states_expires_at", ConnectorOAuthState.expires_at)
 Index("ix_connector_connections_workspace_scope", ConnectorConnection.workspace_id, ConnectorConnection.owner_scope, ConnectorConnection.owner_user_id)
 Index("ix_connector_resources_connection_id", ConnectorResource.connection_id)
 Index("ix_connector_resources_auto_due", ConnectorResource.sync_mode, ConnectorResource.next_auto_sync_at)
+Index("ix_connector_resources_visibility_scope", ConnectorResource.visibility_scope)
 Index("ix_connector_source_items_document_id", ConnectorSourceItem.internal_document_id)
 Index("ix_connector_source_items_resource_status", ConnectorSourceItem.resource_id, ConnectorSourceItem.item_status)
 Index("ix_connector_sync_jobs_status_priority_requested", ConnectorSyncJob.status, ConnectorSyncJob.priority, ConnectorSyncJob.requested_at)
+Index("ix_documents_visibility_scope", Document.visibility_scope)
+Index("ix_knowledge_concepts_validation_state", KnowledgeConcept.validation_state, KnowledgeConcept.review_required)
+Index("ix_glossary_validation_runs_workspace_requested", GlossaryValidationRun.workspace_id, GlossaryValidationRun.requested_at.desc())
+Index("ix_glossary_jobs_status_priority_requested", GlossaryJob.status, GlossaryJob.priority, GlossaryJob.requested_at)

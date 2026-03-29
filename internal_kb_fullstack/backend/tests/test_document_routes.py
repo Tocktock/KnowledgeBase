@@ -23,6 +23,7 @@ def make_document_row(*, doc_type: str = "knowledge") -> dict[str, object]:
         "language_code": "ko",
         "doc_type": doc_type,
         "status": "published",
+        "visibility_scope": "member_visible",
         "owner_team": "product",
         "metadata": {},
         "current_revision_id": None,

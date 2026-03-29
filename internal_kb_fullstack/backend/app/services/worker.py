@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.utils import utcnow
-from app.db.models import ConnectorSyncJob, DocumentChunk, EmbeddingCache, EmbeddingJob, GlossaryJob, GlossaryJobKind
+from app.db.models import ConnectorSyncJob, DocumentChunk, EmbeddingCache, EmbeddingJob, GlossaryJob, GlossaryJobKind, GlossaryValidationRun, JobStatus
 from app.services.connectors import (
     acquire_next_connector_sync_job,
     enqueue_due_sync_jobs,
@@ -19,7 +19,11 @@ from app.services.connectors import (
     process_connector_sync_job,
 )
 from app.services.embeddings import get_embedding_service
-from app.services.glossary import create_or_regenerate_glossary_draft, refresh_glossary_concepts
+from app.services.glossary import (
+    create_or_regenerate_glossary_draft,
+    execute_glossary_validation_run,
+    refresh_glossary_concepts,
+)
 
 
 async def acquire_next_job(session: AsyncSession) -> EmbeddingJob | None:
@@ -126,6 +130,15 @@ async def heartbeat(session: AsyncSession, job_id: UUID) -> None:
 
 
 async def mark_glossary_job_failed(session: AsyncSession, job_id: UUID, message: str) -> None:
+    job = await session.get(GlossaryJob, job_id)
+    if job is not None and job.kind == GlossaryJobKind.validation_run.value:
+        run_id = (job.payload or {}).get("run_id")
+        if run_id:
+            run = await session.get(GlossaryValidationRun, UUID(str(run_id)))
+            if run is not None:
+                run.status = JobStatus.failed.value
+                run.error_message = message[:4000]
+                run.finished_at = utcnow()
     await session.execute(
         text(
             """
@@ -310,7 +323,11 @@ async def process_glossary_job(session_factory: async_sessionmaker[AsyncSession]
 
         await heartbeat_glossary_job(session, job.id)
         if job.kind == GlossaryJobKind.refresh.value:
-            updated_count = await refresh_glossary_concepts(session)
+            updated_count = await refresh_glossary_concepts(
+                session,
+                scope=job.scope,
+                target_document_id=job.target_document_id,
+            )
             job.payload = {**(job.payload or {}), "updated_concepts": updated_count}
             await mark_glossary_job_completed(session, job.id)
             await session.commit()
@@ -325,6 +342,20 @@ async def process_glossary_job(session_factory: async_sessionmaker[AsyncSession]
                 payload=dict_to_glossary_draft_payload(job.payload),
             )
             job.target_document_id = detail.concept.generated_document.id if detail.concept.generated_document is not None else None
+            await mark_glossary_job_completed(session, job.id)
+            await session.commit()
+            return
+
+        if job.kind == GlossaryJobKind.validation_run.value:
+            run_id = (job.payload or {}).get("run_id")
+            if not run_id:
+                raise RuntimeError("Glossary validation job is missing run_id.")
+            run = await execute_glossary_validation_run(session, UUID(str(run_id)))
+            job.payload = {
+                **(job.payload or {}),
+                "run_id": str(run.id),
+                "validation_summary": run.validation_summary,
+            }
             await mark_glossary_job_completed(session, job.id)
             await session.commit()
             return

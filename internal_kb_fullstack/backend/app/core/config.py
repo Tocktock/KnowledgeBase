@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
     google_oauth_redirect_uri: str | None = None
+    github_oauth_client_id: str = ""
+    github_oauth_client_secret: str = ""
+    github_oauth_redirect_uri: str | None = None
     notion_oauth_client_id: str = ""
     notion_oauth_client_secret: str = ""
     notion_oauth_redirect_uri: str | None = None

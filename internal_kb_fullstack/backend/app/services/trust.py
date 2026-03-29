@@ -9,13 +9,14 @@ SOURCE_LABELS = {
     "manual": "Workspace note",
     "upload": "Uploaded file",
     "repo": "Repository",
+    "github": "GitHub",
     "notion": "Notion",
     "notion-export": "Notion",
     "glossary": "Concept layer",
     "google-drive": "Google Drive",
 }
 
-EXTERNAL_SYNC_SOURCES = {"google-drive", "notion", "notion-export", "repo"}
+EXTERNAL_SYNC_SOURCES = {"google-drive", "github", "notion", "notion-export", "repo"}
 
 
 def source_label(source_system: str | None) -> str:

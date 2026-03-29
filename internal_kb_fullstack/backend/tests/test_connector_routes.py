@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -10,7 +13,26 @@ from app.db.engine import get_db_session
 from app.main import app
 from app.schemas.auth import OAuthStartResponse
 from app.schemas.connectors import ConnectorReadinessResponse
-from app.services.connectors import _default_sync_schedule_for_scope
+from app.services.auth import AuthenticatedUser
+from app.services.connectors import (
+    _default_sync_schedule_for_scope,
+    _github_doc_path_supported,
+    _resource_supports_connector_sync,
+    _validate_resource_kind,
+    request_resource_sync,
+)
+from app.services import connectors as connector_service
+
+
+def make_auth_user(*, role: str = "owner") -> AuthenticatedUser:
+    return AuthenticatedUser(
+        user=SimpleNamespace(id=uuid4(), email="owner@example.com", name="Owner", avatar_url=None),
+        roles=["member"],
+        current_workspace_id=uuid4(),
+        current_workspace_slug="default",
+        current_workspace_name="Default Workspace",
+        current_workspace_role=role,
+    )
 
 
 @pytest.mark.asyncio
@@ -88,6 +110,17 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
                     "recommended_templates": ["shared_drive", "folder"],
                 },
                 {
+                    "provider": "github",
+                    "oauth_configured": True,
+                    "workspace_connection_exists": False,
+                    "workspace_connection_status": None,
+                    "viewer_can_manage_workspace_connection": False,
+                    "setup_state": "setup_needed",
+                    "healthy_source_count": 0,
+                    "needs_attention_count": 0,
+                    "recommended_templates": ["repository_docs", "repository_evidence"],
+                },
+                {
                     "provider": "notion",
                     "oauth_configured": False,
                     "workspace_connection_exists": False,
@@ -96,7 +129,7 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
                     "setup_state": "not_configured",
                     "healthy_source_count": 0,
                     "needs_attention_count": 0,
-                    "recommended_templates": ["page", "database"],
+                    "recommended_templates": ["page", "database", "export_upload"],
                 },
             ]
         )
@@ -126,6 +159,17 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
                 "recommended_templates": ["shared_drive", "folder"],
             },
             {
+                "provider": "github",
+                "oauth_configured": True,
+                "workspace_connection_exists": False,
+                "workspace_connection_status": None,
+                "viewer_can_manage_workspace_connection": False,
+                "setup_state": "setup_needed",
+                "healthy_source_count": 0,
+                "needs_attention_count": 0,
+                "recommended_templates": ["repository_docs", "repository_evidence"],
+            },
+            {
                 "provider": "notion",
                 "oauth_configured": False,
                 "workspace_connection_exists": False,
@@ -134,7 +178,7 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
                 "setup_state": "not_configured",
                 "healthy_source_count": 0,
                 "needs_attention_count": 0,
-                "recommended_templates": ["page", "database"],
+                "recommended_templates": ["page", "database", "export_upload"],
             },
         ]
     }
@@ -143,3 +187,51 @@ async def test_connectors_readiness_route_allows_anonymous_view(monkeypatch: pyt
 def test_default_sync_schedule_uses_scope_defaults() -> None:
     assert _default_sync_schedule_for_scope("workspace") == ("auto", 60)
     assert _default_sync_schedule_for_scope("personal") == ("manual", None)
+
+
+def test_validate_resource_kind_accepts_github_repository_docs() -> None:
+    assert _validate_resource_kind("github", "repository_docs") == "repository_docs"
+    assert _validate_resource_kind("github", "repository_evidence") == "repository_evidence"
+    assert _validate_resource_kind("notion", "export_upload") == "export_upload"
+
+
+def test_github_doc_path_supported_filters_expected_files() -> None:
+    assert _github_doc_path_supported("README.md") is True
+    assert _github_doc_path_supported("docs/architecture.md") is True
+    assert _github_doc_path_supported("doc/runbook.txt") is True
+    assert _github_doc_path_supported("src/index.ts") is False
+    assert _github_doc_path_supported("docs/logo.png") is False
+
+
+def test_resource_supports_connector_sync_rejects_uploaded_exports() -> None:
+    assert _resource_supports_connector_sync(SimpleNamespace(selection_mode="browse")) is True
+    assert _resource_supports_connector_sync(SimpleNamespace(selection_mode="search")) is True
+    assert _resource_supports_connector_sync(SimpleNamespace(selection_mode="export_upload")) is False
+
+
+@pytest.mark.asyncio
+async def test_request_resource_sync_rejects_uploaded_export_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_user = make_auth_user(role="owner")
+    connection = SimpleNamespace(id=uuid4(), owner_scope="workspace")
+    resource = SimpleNamespace(id=uuid4(), connection_id=connection.id, selection_mode="export_upload")
+    enqueue_called = False
+
+    async def fake_get_connection_or_raise(_session, _connection_id, _auth_user):
+        return connection
+
+    async def fake_get_resource_or_raise(_session, _resource_id):
+        return resource
+
+    async def fake_enqueue_connector_sync_job(*args, **kwargs):
+        nonlocal enqueue_called
+        enqueue_called = True
+        raise AssertionError("enqueue_connector_sync_job should not be called for uploaded exports")
+
+    monkeypatch.setattr(connector_service, "_get_connection_or_raise", fake_get_connection_or_raise)
+    monkeypatch.setattr(connector_service, "_get_resource_or_raise", fake_get_resource_or_raise)
+    monkeypatch.setattr(connector_service, "enqueue_connector_sync_job", fake_enqueue_connector_sync_job)
+
+    with pytest.raises(connector_service.ConnectorError, match="업로드형 내보내기는 새 파일 업로드로 갱신하세요."):
+        await request_resource_sync(object(), auth_user, connection.id, resource.id)
+
+    assert enqueue_called is False

@@ -8,6 +8,7 @@ import {
   Copy,
   ExternalLink,
   FolderOpen,
+  Github,
   HardDrive,
   KeyRound,
   Link2,
@@ -53,17 +54,20 @@ import {
   formatConnectorResourceKindLabel,
   formatConnectorStatusLabel,
   formatConnectorSyncModeLabel,
+  formatConnectorVisibilityScopeLabel,
   formatDate,
   formatStatusLabel,
 } from '@/lib/utils'
 
 type Scope = 'workspace' | 'personal'
 type SyncMode = 'manual' | 'auto'
-type ProviderKey = 'google_drive' | 'notion'
-type ProviderPath = 'google-drive' | 'notion'
+type VisibilityScope = 'member_visible' | 'evidence_only'
+type ProviderKey = 'google_drive' | 'github' | 'notion'
+type ProviderPath = 'google-drive' | 'github' | 'notion'
 type GoogleResourceKind = 'folder' | 'shared_drive'
-type NotionResourceKind = 'page' | 'database'
-type ResourceKind = GoogleResourceKind | NotionResourceKind
+type GitHubResourceKind = 'repository_docs' | 'repository_evidence'
+type NotionResourceKind = 'page' | 'database' | 'export_upload'
+type ResourceKind = GoogleResourceKind | GitHubResourceKind | NotionResourceKind
 type ResourceRecord = {
   connection: ConnectorConnectionSummary
   resource: ConnectorResourceSummary
@@ -75,6 +79,9 @@ type ProviderTemplate = {
   organizationLabel: string
   personalLabel: string
   description: string
+  defaultVisibilityScope?: VisibilityScope
+  selectionMode?: string
+  selectionHint?: string
 }
 
 type ProviderDefinition = {
@@ -115,6 +122,33 @@ const providerDefinitions: ProviderDefinition[] = [
     ],
   },
   {
+    key: 'github',
+    path: 'github',
+    label: 'GitHub',
+    description: '팀 저장소 문서를 기존 지식 레이어로 가져옵니다.',
+    organizationDescription: '조직 관리자가 저장소 문서를 한 번 연결하면 README와 docs 폴더가 공용 지식 레이어로 동기화됩니다.',
+    personalDescription: '내 저장소 문서를 필요할 때만 연결해 보조 자료로 가져옵니다.',
+    icon: Github,
+    templates: [
+      {
+        id: 'repository_docs',
+        resourceKind: 'repository_docs',
+        organizationLabel: '저장소 문서 연결',
+        personalLabel: '내 저장소 문서 연결',
+        description: 'README와 docs 폴더 문서를 함께 가져옵니다.',
+      },
+      {
+        id: 'repository_evidence',
+        resourceKind: 'repository_evidence',
+        organizationLabel: '저장소 용어 근거 연결',
+        personalLabel: '내 저장소 용어 근거 연결',
+        description: '저장소 전반의 텍스트 파일을 용어 검증 근거로만 가져옵니다.',
+        defaultVisibilityScope: 'evidence_only',
+        selectionHint: '검색, 문서 목록에는 숨기고 용어 검증 근거로만 사용합니다.',
+      },
+    ],
+  },
+  {
     key: 'notion',
     path: 'notion',
     label: 'Notion',
@@ -137,6 +171,16 @@ const providerDefinitions: ProviderDefinition[] = [
         personalLabel: '내 데이터베이스 연결',
         description: '데이터베이스의 하위 페이지 전체를 함께 가져옵니다.',
       },
+      {
+        id: 'export_upload',
+        resourceKind: 'export_upload',
+        organizationLabel: 'Notion 내보내기 업로드',
+        personalLabel: '내 Notion 내보내기 업로드',
+        description: '내보낸 ZIP 또는 문서 파일을 검증용 근거 코퍼스로 가져옵니다.',
+        defaultVisibilityScope: 'evidence_only',
+        selectionMode: 'export_upload',
+        selectionHint: '구성원 검색에는 숨기고 용어 검증 근거로만 사용합니다.',
+      },
     ],
   },
 ]
@@ -150,6 +194,17 @@ const intervalOptions = [
 
 const selectClassName =
   'h-11 w-full rounded-xl border border-neutral-200 bg-white px-4 text-sm text-neutral-900 outline-none ring-0 focus:border-blue-500 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100'
+
+function defaultVisibilityScopeForResource(resourceKind: ResourceKind): VisibilityScope {
+  return resourceKind === 'repository_evidence' || resourceKind === 'export_upload'
+    ? 'evidence_only'
+    : 'member_visible'
+}
+
+function defaultSelectionModeForResource(resourceKind: ResourceKind): string {
+  if (resourceKind === 'export_upload') return 'export_upload'
+  return 'browse'
+}
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -242,6 +297,7 @@ function SyncSummary({ summary }: { summary: Record<string, number> }) {
     ['failed', '실패'],
     ['deleted', '사라짐'],
   ] as const
+  const total = entries.reduce((sum, [key]) => sum + Number(summary[key] ?? 0), 0)
 
   return (
     <div className="flex flex-wrap gap-2">
@@ -250,6 +306,7 @@ function SyncSummary({ summary }: { summary: Record<string, number> }) {
           {label} {Number(summary[key] ?? 0)}
         </Badge>
       ))}
+      {Object.keys(summary).length > 0 && total === 0 ? <Badge>문서 후보 없음</Badge> : null}
     </div>
   )
 }
@@ -360,11 +417,19 @@ function ResourceRow({
   canManage: boolean
 }) {
   const queryClient = useQueryClient()
+  const isUploadSnapshot = resource.selection_mode === 'export_upload'
   const [syncMode, setSyncMode] = useState<SyncMode>(resource.sync_mode === 'auto' ? 'auto' : 'manual')
   const [intervalMinutes, setIntervalMinutes] = useState<number>(resource.sync_interval_minutes ?? 60)
+  const [visibilityScope, setVisibilityScope] = useState<VisibilityScope>(
+    resource.visibility_scope === 'evidence_only' ? 'evidence_only' : 'member_visible',
+  )
 
   const updateMutation = useMutation({
-    mutationFn: async (payload: { sync_mode: SyncMode; sync_interval_minutes: number | null }) =>
+    mutationFn: async (payload: {
+      sync_mode?: SyncMode
+      sync_interval_minutes?: number | null
+      visibility_scope?: VisibilityScope
+    }) =>
       fetchJson<ConnectorResourceSummary>(`/api/connectors/${connection.id}/resources/${resource.id}`, {
         method: 'PATCH',
         body: JSON.stringify(payload),
@@ -372,6 +437,7 @@ function ResourceRow({
     onSuccess: async (updated) => {
       setSyncMode(updated.sync_mode === 'auto' ? 'auto' : 'manual')
       setIntervalMinutes(updated.sync_interval_minutes ?? 60)
+      setVisibilityScope(updated.visibility_scope === 'evidence_only' ? 'evidence_only' : 'member_visible')
       await queryClient.invalidateQueries({ queryKey: ['connectors'] })
     },
   })
@@ -409,6 +475,8 @@ function ResourceRow({
             <span>{formatConnectorResourceKindLabel(resource.resource_kind)}</span>
             <span>·</span>
             <span>{formatStatusLabel(resource.status)}</span>
+            <span>·</span>
+            <span>{formatConnectorVisibilityScopeLabel(resource.visibility_scope)}</span>
           </div>
           {resource.resource_url ? (
             <Link
@@ -432,6 +500,21 @@ function ResourceRow({
           <select
             className={selectClassName}
             disabled={!canManage || updateMutation.isPending}
+            value={visibilityScope}
+            onChange={(event) => {
+              const nextScope = event.target.value as VisibilityScope
+              setVisibilityScope(nextScope)
+              updateMutation.mutate({
+                visibility_scope: nextScope,
+              })
+            }}
+          >
+            <option value="member_visible">구성원에게 공개</option>
+            <option value="evidence_only">검증 전용</option>
+          </select>
+          <select
+            className={selectClassName}
+            disabled={!canManage || isUploadSnapshot || updateMutation.isPending}
             value={syncMode}
             onChange={(event) => {
               const nextMode = event.target.value as SyncMode
@@ -447,7 +530,7 @@ function ResourceRow({
           </select>
           <select
             className={selectClassName}
-            disabled={!canManage || syncMode !== 'auto' || updateMutation.isPending}
+            disabled={!canManage || isUploadSnapshot || syncMode !== 'auto' || updateMutation.isPending}
             value={String(intervalMinutes)}
             onChange={(event) => {
               const nextInterval = Number(event.target.value)
@@ -471,6 +554,9 @@ function ResourceRow({
           <div>최근 시작 {formatDate(resource.last_sync_started_at)}</div>
           <div>최근 완료 {formatDate(resource.last_sync_completed_at)}</div>
           {resource.next_auto_sync_at ? <div>다음 자동 {formatDate(resource.next_auto_sync_at)}</div> : null}
+          {isUploadSnapshot ? (
+            <div className="text-xs text-neutral-400">업로드형 스냅샷입니다. 새 파일 업로드로만 갱신할 수 있습니다.</div>
+          ) : null}
           <SyncSummary summary={resource.last_sync_summary || {}} />
         </div>
       </td>
@@ -479,7 +565,7 @@ function ResourceRow({
           <Button
             size="sm"
             variant="outline"
-            disabled={!canManage || syncMutation.isPending}
+            disabled={!canManage || isUploadSnapshot || syncMutation.isPending}
             onClick={() => syncMutation.mutate()}
           >
             {syncMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
@@ -502,6 +588,11 @@ function ResourceRow({
         {syncMutation.error ? (
           <div className="mt-2 text-xs text-red-600 dark:text-red-400">
             {syncMutation.error instanceof Error ? syncMutation.error.message : '동기화를 요청하지 못했습니다.'}
+          </div>
+        ) : null}
+        {isUploadSnapshot ? (
+          <div className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+            업로드형 내보내기는 동기화 대신 새 내보내기 파일을 다시 올려 갱신합니다.
           </div>
         ) : null}
       </td>
@@ -572,6 +663,7 @@ function ConnectedResourcesList({
                 <Badge>{formatConnectorProviderLabel(connection.provider)}</Badge>
                 <Badge>{formatConnectorResourceKindLabel(resource.resource_kind)}</Badge>
                 <Badge>{formatStatusLabel(resource.status)}</Badge>
+                <Badge>{formatConnectorVisibilityScopeLabel(resource.visibility_scope)}</Badge>
               </div>
               <div className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
                 동기화 {formatConnectorSyncModeLabel(resource.sync_mode)} · 최근 완료 {formatDate(resource.last_sync_completed_at)}
@@ -638,10 +730,14 @@ function ConnectionManager({
   const [syncChildren, setSyncChildren] = useState(provider.key === 'google_drive')
   const [syncMode, setSyncMode] = useState<SyncMode>(connection.owner_scope === 'workspace' ? 'auto' : 'manual')
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(60)
+  const [visibilityScope, setVisibilityScope] = useState<VisibilityScope>('member_visible')
+  const [selectionMode, setSelectionMode] = useState('browse')
   const [showItems, setShowItems] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showInternalDetails, setShowInternalDetails] = useState(false)
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null)
+  const [uploadName, setUploadName] = useState('')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
 
   const [googleBrowseKind, setGoogleBrowseKind] = useState<GoogleResourceKind>('folder')
   const [googleParentId, setGoogleParentId] = useState<string | null>(null)
@@ -657,6 +753,13 @@ function ConnectionManager({
   const [notionHasMore, setNotionHasMore] = useState(false)
   const [notionLoading, setNotionLoading] = useState(false)
   const [notionError, setNotionError] = useState<string | null>(null)
+
+  const [githubQuery, setGithubQuery] = useState('')
+  const [githubResults, setGithubResults] = useState<ConnectorBrowseItem[]>([])
+  const [githubCursor, setGithubCursor] = useState<string | null>(null)
+  const [githubHasMore, setGithubHasMore] = useState(false)
+  const [githubLoading, setGithubLoading] = useState(false)
+  const [githubError, setGithubError] = useState<string | null>(null)
 
   const selectedTemplate = provider.templates.find((item) => item.id === activeTemplateId) ?? null
 
@@ -676,6 +779,8 @@ function ConnectionManager({
           name: resourceName,
           resource_url: resourceUrl || null,
           parent_external_id: parentExternalId || null,
+          visibility_scope: visibilityScope,
+          selection_mode: selectionMode,
           sync_children: connection.provider === 'google_drive' ? syncChildren : resourceKind === 'database',
           sync_mode: syncMode,
           sync_interval_minutes: syncMode === 'auto' ? syncIntervalMinutes : null,
@@ -699,6 +804,33 @@ function ConnectionManager({
         setNotionCursor(null)
         setNotionHasMore(false)
       }
+      await queryClient.invalidateQueries({ queryKey: ['connectors'] })
+    },
+  })
+
+  const uploadExportMutation = useMutation({
+    mutationFn: async () => {
+      if (!uploadFile) {
+        throw new Error('업로드할 Notion 내보내기 파일을 선택해 주세요.')
+      }
+      const formData = new FormData()
+      formData.set('name', uploadName.trim() || uploadFile.name.replace(/\.[^.]+$/, ''))
+      formData.set('visibility_scope', visibilityScope)
+      formData.set('file', uploadFile)
+      const response = await fetch(`/api/connectors/${connection.id}/resources/upload`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(detail || 'Notion 내보내기 파일을 업로드하지 못했습니다.')
+      }
+      return (await response.json()) as ConnectorResourceSummary
+    },
+    onSuccess: async () => {
+      setUploadFile(null)
+      setUploadName('')
+      setShowInternalDetails(false)
       await queryClient.invalidateQueries({ queryKey: ['connectors'] })
     },
   })
@@ -751,6 +883,25 @@ function ConnectionManager({
     }
   }
 
+  async function searchGithub(kind: GitHubResourceKind, cursor?: string | null, queryOverride?: string) {
+    setGithubLoading(true)
+    setGithubError(null)
+    try {
+      const search = new URLSearchParams({ kind })
+      const queryText = queryOverride ?? githubQuery.trim()
+      if (queryText) search.set('query', queryText)
+      if (cursor) search.set('cursor', cursor)
+      const payload = await fetchJson<ConnectorBrowseResponse>(`/api/connectors/${connection.id}/browse?${search.toString()}`)
+      setGithubResults((current) => (cursor ? [...current, ...payload.items] : payload.items))
+      setGithubCursor(payload.cursor ?? null)
+      setGithubHasMore(payload.has_more)
+    } catch (error) {
+      setGithubError(error instanceof Error ? error.message : 'GitHub 저장소를 불러오지 못했습니다.')
+    } finally {
+      setGithubLoading(false)
+    }
+  }
+
   function applySelectedItem(item: ConnectorBrowseItem) {
     setResourceKind(item.resource_kind as ResourceKind)
     setExternalId(item.id)
@@ -758,6 +909,8 @@ function ConnectionManager({
     setResourceUrl(item.resource_url ?? '')
     setParentExternalId(item.parent_external_id ?? '')
     setProviderMetadata(item.provider_metadata)
+    setVisibilityScope(defaultVisibilityScopeForResource(item.resource_kind as ResourceKind))
+    setSelectionMode(defaultSelectionModeForResource(item.resource_kind as ResourceKind))
     setSyncChildren(connection.provider === 'google_drive' ? true : item.resource_kind === 'database')
   }
 
@@ -770,7 +923,11 @@ function ConnectionManager({
     setResourceUrl('')
     setParentExternalId('')
     setProviderMetadata({})
+    setUploadName('')
+    setUploadFile(null)
     setResourceKind(template.resourceKind)
+    setVisibilityScope(template.defaultVisibilityScope ?? defaultVisibilityScopeForResource(template.resourceKind))
+    setSelectionMode(template.selectionMode ?? defaultSelectionModeForResource(template.resourceKind))
     setSyncChildren(connection.provider === 'google_drive' ? true : template.resourceKind === 'database')
     if (connection.provider === 'google_drive') {
       setGoogleHistory([])
@@ -778,6 +935,20 @@ function ConnectionManager({
       setGoogleParentId(null)
       setGoogleContainerId(null)
       loadGoogleBrowse(template.resourceKind as GoogleResourceKind)
+      return
+    }
+    if (connection.provider === 'github') {
+      setGithubQuery('')
+      setGithubResults([])
+      setGithubCursor(null)
+      setGithubHasMore(false)
+      searchGithub(template.resourceKind as GitHubResourceKind, null, '')
+      return
+    }
+    if (template.resourceKind === 'export_upload') {
+      setNotionResults([])
+      setNotionCursor(null)
+      setNotionHasMore(false)
       return
     }
     setNotionQuery('')
@@ -859,6 +1030,9 @@ function ConnectionManager({
                     ? `${templateLabel(selectedTemplate, connection.owner_scope as Scope)} 템플릿으로 항목을 고르는 중입니다.`
                     : '템플릿을 먼저 고르면 항목 선택기가 열립니다.'}
                 </div>
+                {selectedTemplate?.selectionHint ? (
+                  <div className="mt-1 text-xs text-neutral-400">{selectedTemplate.selectionHint}</div>
+                ) : null}
               </div>
               {selectedTemplate ? <Badge>{templateLabel(selectedTemplate, connection.owner_scope as Scope)}</Badge> : null}
             </div>
@@ -958,11 +1132,56 @@ function ConnectionManager({
                   </>
                 )}
               </div>
-            ) : (
+            ) : connection.provider === 'notion' ? (
               <div className="space-y-4">
                 {!selectedTemplate ? (
                   <div className="rounded-2xl border border-dashed border-neutral-300 px-4 py-8 text-sm text-neutral-500 dark:border-neutral-700">
                     위 템플릿에서 페이지 또는 데이터베이스를 먼저 선택해 주세요.
+                  </div>
+                ) : resourceKind === 'export_upload' ? (
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
+                      Notion에서 내보낸 ZIP 또는 문서 파일을 업로드하면 검증 전용 근거 코퍼스로 바로 가져옵니다.
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <label className="space-y-2 text-sm">
+                        <div className="font-medium text-neutral-700 dark:text-neutral-300">표시 이름</div>
+                        <Input
+                          value={uploadName}
+                          onChange={(event) => setUploadName(event.target.value)}
+                          placeholder="예: Product Wiki export"
+                          disabled={!canManage}
+                        />
+                      </label>
+                      <label className="space-y-2 text-sm">
+                        <div className="font-medium text-neutral-700 dark:text-neutral-300">내보내기 파일</div>
+                        <Input
+                          type="file"
+                          accept=".zip,.md,.markdown,.html,.htm,.txt"
+                          disabled={!canManage}
+                          onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                    </div>
+                    <div className="text-xs text-neutral-500">
+                      기본값은 검증 전용입니다. 일반 문서 목록과 검색에는 노출되지 않고 용어 검증 근거로만 사용됩니다.
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        disabled={!canManage || !uploadFile || uploadExportMutation.isPending}
+                        onClick={() => uploadExportMutation.mutate()}
+                      >
+                        {uploadExportMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                        내보내기 업로드
+                      </Button>
+                    </div>
+                    {uploadExportMutation.error ? (
+                      <div className="text-sm text-red-600 dark:text-red-400">
+                        {uploadExportMutation.error instanceof Error
+                          ? uploadExportMutation.error.message
+                          : 'Notion 내보내기 파일을 업로드하지 못했습니다.'}
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <>
@@ -1066,6 +1285,116 @@ function ConnectionManager({
                   </>
                 )}
               </div>
+            ) : (
+              <div className="space-y-4">
+                {!selectedTemplate ? (
+                  <div className="rounded-2xl border border-dashed border-neutral-300 px-4 py-8 text-sm text-neutral-500 dark:border-neutral-700">
+                    위 템플릿에서 저장소 문서 또는 용어 근거 연결을 먼저 선택해 주세요.
+                  </div>
+                ) : (
+                  <>
+                    <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
+                      {resourceKind === 'repository_evidence'
+                        ? '연결한 계정이 접근할 수 있는 저장소만 보입니다. 저장소의 텍스트 파일을 용어 검증 근거로 가져오고, build/vendor/바이너리는 기본적으로 제외합니다.'
+                        : '연결한 계정이 접근할 수 있는 저장소만 보입니다. README와 docs/doc 폴더의 문서만 동기화됩니다.'}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+                      <label className="space-y-2 text-sm">
+                        <div className="font-medium text-neutral-700 dark:text-neutral-300">저장소 검색</div>
+                        <Input
+                          value={githubQuery}
+                          onChange={(event) => setGithubQuery(event.target.value)}
+                          placeholder="owner/repo 또는 저장소 이름"
+                          disabled={!canManage}
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <Button
+                          disabled={!canManage || githubLoading}
+                          onClick={() => {
+                            setGithubResults([])
+                            setGithubCursor(null)
+                            setGithubHasMore(false)
+                            searchGithub(resourceKind as GitHubResourceKind)
+                          }}
+                        >
+                          {githubLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}
+                          검색
+                        </Button>
+                      </div>
+                      <div className="flex items-end">
+                        <Button
+                          variant="outline"
+                          disabled={!canManage || githubLoading}
+                          onClick={() => {
+                            setGithubQuery('')
+                            setGithubResults([])
+                            setGithubCursor(null)
+                            setGithubHasMore(false)
+                            searchGithub(resourceKind as GitHubResourceKind, null, '')
+                          }}
+                        >
+                          최근 저장소
+                        </Button>
+                      </div>
+                      <div className="flex items-end">
+                        <Button
+                          variant="ghost"
+                          disabled={!canManage || githubLoading}
+                          onClick={() => {
+                            setGithubResults([])
+                            setGithubCursor(null)
+                            setGithubHasMore(false)
+                            searchGithub(resourceKind as GitHubResourceKind)
+                          }}
+                        >
+                          <RefreshCcw className="size-4" /> 새로고침
+                        </Button>
+                      </div>
+                    </div>
+
+                    {githubResults.length > 0 ? (
+                      <div className="rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800">
+                        <div className="mb-3 text-sm font-medium text-neutral-900 dark:text-neutral-50">저장소 선택</div>
+                        <div className="space-y-2">
+                          {githubResults.map((item) => (
+                            <div
+                              key={item.id}
+                              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800"
+                            >
+                              <div>
+                                <div className="text-sm font-medium text-neutral-900 dark:text-neutral-50">{item.name}</div>
+                                <div className="mt-1 text-xs text-neutral-400">
+                                  {resourceKind === 'repository_evidence'
+                                    ? '저장소 텍스트 파일을 검증 근거로만 동기화'
+                                    : 'README와 docs/doc 폴더 문서를 함께 동기화'}
+                                </div>
+                              </div>
+                              <Button size="sm" variant="outline" onClick={() => applySelectedItem(item)}>
+                                선택
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                        {githubHasMore ? (
+                          <div className="mt-3">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={!githubCursor || githubLoading}
+                              onClick={() => searchGithub(resourceKind as GitHubResourceKind, githubCursor)}
+                            >
+                              더 보기
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {githubError ? <div className="text-sm text-red-600 dark:text-red-400">{githubError}</div> : null}
+                  </>
+                )}
+              </div>
             )}
 
             {externalId ? (
@@ -1086,6 +1415,18 @@ function ConnectionManager({
                 <div className="rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800">
                   <div className="mb-3 text-sm font-semibold text-neutral-900 dark:text-neutral-50">동기화 설정</div>
                   <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-2 text-sm">
+                      <div className="font-medium text-neutral-700 dark:text-neutral-300">사용 범위</div>
+                      <select
+                        className={selectClassName}
+                        value={visibilityScope}
+                        disabled={!canManage}
+                        onChange={(event) => setVisibilityScope(event.target.value as VisibilityScope)}
+                      >
+                        <option value="member_visible">구성원에게 공개</option>
+                        <option value="evidence_only">검증 전용</option>
+                      </select>
+                    </label>
                     <label className="space-y-2 text-sm">
                       <div className="font-medium text-neutral-700 dark:text-neutral-300">동기화 방식</div>
                       <select
@@ -1127,13 +1468,27 @@ function ConnectionManager({
                     </label>
                   ) : (
                     <div className="mt-3 text-sm text-neutral-500">
-                      {resourceKind === 'database' ? '데이터베이스는 하위 페이지를 함께 가져옵니다.' : '선택한 항목만 동기화됩니다.'}
+                      {resourceKind === 'database'
+                        ? '데이터베이스는 하위 페이지를 함께 가져옵니다.'
+                        : resourceKind === 'repository_evidence'
+                          ? '저장소 텍스트 파일을 검증 전용 근거로 자동으로 가져옵니다.'
+                        : resourceKind === 'repository_docs'
+                          ? 'README와 docs/doc 폴더 문서를 자동으로 가져옵니다.'
+                          : resourceKind === 'export_upload'
+                            ? '업로드형 Notion 내보내기는 위 전용 업로드 버튼으로 연결합니다.'
+                          : '선택한 항목만 동기화됩니다.'}
                     </div>
                   )}
 
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Button
-                      disabled={!canManage || !externalId.trim() || !resourceName.trim() || createResourceMutation.isPending}
+                      disabled={
+                        !canManage ||
+                        resourceKind === 'export_upload' ||
+                        !externalId.trim() ||
+                        !resourceName.trim() ||
+                        createResourceMutation.isPending
+                      }
                       onClick={() => createResourceMutation.mutate()}
                     >
                       {createResourceMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
@@ -1161,6 +1516,10 @@ function ConnectionManager({
                       <label className="space-y-2 text-sm">
                         <div className="font-medium text-neutral-700 dark:text-neutral-300">상위 ID</div>
                         <Input value={parentExternalId} readOnly disabled />
+                      </label>
+                      <label className="space-y-2 text-sm">
+                        <div className="font-medium text-neutral-700 dark:text-neutral-300">사용 범위</div>
+                        <Input value={formatConnectorVisibilityScopeLabel(visibilityScope)} readOnly disabled />
                       </label>
                     </div>
                   ) : null}
@@ -1651,7 +2010,7 @@ export function ConnectorsPage() {
             </div>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{title}</h1>
             <p className="mt-2 text-sm leading-7 text-neutral-500">
-              관리자는 팀의 Google Drive와 Notion을 한 번 연결하고, 구성원은 별도 설정 없이 검색과 문서 탐색에서 같은 지식을 바로 사용합니다.
+              관리자는 팀의 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 별도 설정 없이 검색과 문서 탐색에서 같은 지식을 바로 사용합니다.
             </p>
           </div>
           <div className="rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
@@ -1745,7 +2104,7 @@ export function ConnectorsPage() {
       {!authenticated ? (
         <ScopeSection
           title="조직 연결"
-          description="Google Drive 또는 Notion을 선택하면 로그인 후 바로 해당 데이터 소스 연결 단계로 이어집니다."
+          description="Google Drive, GitHub, Notion 중 하나를 선택하면 로그인 후 바로 해당 데이터 소스 연결 단계로 이어집니다."
           scope="workspace"
           canManage={false}
           authenticated={false}
@@ -1779,7 +2138,7 @@ export function ConnectorsPage() {
             description={
               workspaceReady
                 ? '조직에서 연결한 공용 문서는 로그인한 모든 사용자가 같은 저장소에서 검색하고 탐색할 수 있습니다.'
-                : 'Google Drive 또는 Notion을 한 번 연결해 조직 문서를 공용 저장소로 가져오세요.'
+                : 'Google Drive, GitHub, Notion 중 하나를 한 번 연결해 조직 문서를 공용 저장소로 가져오세요.'
             }
             scope="workspace"
             canManage={true}
@@ -1821,7 +2180,7 @@ export function ConnectorsPage() {
               <ShieldCheck className="size-4 text-blue-500" /> 조직 연결은 읽기 전용입니다
             </div>
             <div className="text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-              현재 워크스페이스에서는 관리자만 조직 Google Drive와 Notion 연결을 만들거나 다시 연결할 수 있습니다. 조직에서 이미 연결한 데이터는 아래에서 그대로 확인할 수 있습니다.
+              현재 워크스페이스에서는 관리자만 조직 Google Drive, GitHub, Notion 연결을 만들거나 다시 연결할 수 있습니다. 조직에서 이미 연결한 데이터는 아래에서 그대로 확인할 수 있습니다.
             </div>
           </Card>
 

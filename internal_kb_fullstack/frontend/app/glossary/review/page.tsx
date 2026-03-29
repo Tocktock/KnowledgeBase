@@ -5,7 +5,7 @@ import { getGlossaryConcepts } from '@/lib/api/server'
 export const dynamic = 'force-dynamic'
 
 export default async function GlossaryReviewRoutePage() {
-  const initialList = await getGlossaryConcepts({ status: 'suggested', limit: 40 }).catch(() => ({
+  const initialList = await getGlossaryConcepts({ limit: 40 }).catch(() => ({
     items: [],
     total: 0,
     limit: 40,

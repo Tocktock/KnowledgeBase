@@ -3,10 +3,13 @@ from __future__ import annotations
 import base64
 import csv
 import io
+import zipfile
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Any
-from uuid import UUID
+from urllib.parse import quote
+from uuid import UUID, uuid4
 
 import httpx
 import pytesseract
@@ -44,6 +47,7 @@ from app.db.models import (
     ConnectorSyncJobKind,
     ConnectorSyncMode,
     Document,
+    DocumentVisibilityScope,
     JobStatus,
 )
 from app.schemas.connectors import (
@@ -64,6 +68,7 @@ from app.schemas.documents import IngestDocumentRequest
 from app.schemas.jobs import JobSummary
 from app.services.auth import AuthenticatedUser
 from app.services.ingest import ingest_document
+from app.services.parser import DocumentParser
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -81,14 +86,23 @@ NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
 NOTION_API_URL = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 
+GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_API_URL = "https://api.github.com"
+GITHUB_CONNECTOR_SCOPES = ["read:user", "user:email", "repo"]
+GITHUB_DOC_EXTENSIONS = {".md", ".mdx", ".rst", ".adoc", ".txt"}
+NOTION_EXPORT_EXTENSIONS = {".md", ".markdown", ".html", ".htm", ".txt", ".csv"}
+
 SYNC_INTERVALS = {15, 60, 360, 1440}
 PROVIDER_PATH_TO_VALUE = {
     "google-drive": ConnectorProvider.google_drive.value,
     "google_drive": ConnectorProvider.google_drive.value,
+    "github": ConnectorProvider.github.value,
     "notion": ConnectorProvider.notion.value,
 }
 PROVIDER_VALUE_TO_PATH = {
     ConnectorProvider.google_drive.value: "google-drive",
+    ConnectorProvider.github.value: "github",
     ConnectorProvider.notion.value: "notion",
 }
 RESOURCE_KINDS_BY_PROVIDER = {
@@ -96,14 +110,20 @@ RESOURCE_KINDS_BY_PROVIDER = {
         ConnectorResourceKind.folder.value,
         ConnectorResourceKind.shared_drive.value,
     },
+    ConnectorProvider.github.value: {
+        ConnectorResourceKind.repository_docs.value,
+        ConnectorResourceKind.repository_evidence.value,
+    },
     ConnectorProvider.notion.value: {
         ConnectorResourceKind.page.value,
         ConnectorResourceKind.database.value,
+        ConnectorResourceKind.export_upload.value,
     },
 }
 RECOMMENDED_TEMPLATES_BY_PROVIDER = {
     ConnectorProvider.google_drive.value: ["shared_drive", "folder"],
-    ConnectorProvider.notion.value: ["page", "database"],
+    ConnectorProvider.github.value: ["repository_docs", "repository_evidence"],
+    ConnectorProvider.notion.value: ["page", "database", "export_upload"],
 }
 
 
@@ -189,6 +209,8 @@ def _validate_resource_kind(provider: str, value: str | None) -> str:
         return (
             ConnectorResourceKind.folder.value
             if provider == ConnectorProvider.google_drive.value
+            else ConnectorResourceKind.repository_docs.value
+            if provider == ConnectorProvider.github.value
             else ConnectorResourceKind.page.value
         )
     if value not in RESOURCE_KINDS_BY_PROVIDER[provider]:
@@ -197,7 +219,44 @@ def _validate_resource_kind(provider: str, value: str | None) -> str:
 
 
 def _validate_browse_kind(provider: str, value: str | None) -> str:
+    if provider == ConnectorProvider.notion.value and value == ConnectorResourceKind.export_upload.value:
+        raise ConnectorError("Uploaded exports do not support browse.")
     return _validate_resource_kind(provider, value)
+
+
+def _default_visibility_scope(provider: str, resource_kind: str) -> str:
+    if provider == ConnectorProvider.github.value and resource_kind == ConnectorResourceKind.repository_evidence.value:
+        return DocumentVisibilityScope.evidence_only.value
+    if provider == ConnectorProvider.notion.value and resource_kind == ConnectorResourceKind.export_upload.value:
+        return DocumentVisibilityScope.evidence_only.value
+    return DocumentVisibilityScope.member_visible.value
+
+
+def _normalize_visibility_scope(provider: str, resource_kind: str, value: str | None) -> str:
+    normalized = (value or _default_visibility_scope(provider, resource_kind)).strip().lower()
+    if normalized not in {
+        DocumentVisibilityScope.member_visible.value,
+        DocumentVisibilityScope.evidence_only.value,
+    }:
+        raise ConnectorError("Unsupported visibility scope.")
+    return normalized
+
+
+def _default_selection_mode(provider: str, resource_kind: str) -> str:
+    if provider == ConnectorProvider.notion.value and resource_kind == ConnectorResourceKind.export_upload.value:
+        return "export_upload"
+    if provider == ConnectorProvider.github.value:
+        return "search"
+    if provider == ConnectorProvider.notion.value:
+        return "search"
+    return "browse"
+
+
+def _normalize_selection_mode(provider: str, resource_kind: str, value: str | None) -> str:
+    normalized = (value or _default_selection_mode(provider, resource_kind)).strip().lower()
+    if not normalized:
+        raise ConnectorError("Selection mode is required.")
+    return normalized
 
 
 def _normalize_sync_schedule(sync_mode: str, interval: int | None) -> tuple[str, int | None]:
@@ -215,9 +274,21 @@ def _default_sync_schedule_for_scope(owner_scope: str) -> tuple[str, int | None]
     return ConnectorSyncMode.manual.value, None
 
 
+def _resource_supports_connector_sync(resource: ConnectorResource) -> bool:
+    return resource.selection_mode != "export_upload"
+
+
+def _non_syncable_resource_message(resource: ConnectorResource) -> str:
+    if resource.selection_mode == "export_upload":
+        return "업로드형 내보내기는 새 파일 업로드로 갱신하세요."
+    return "이 소스는 커넥터 동기화를 지원하지 않습니다."
+
+
 def _resource_sync_defaults(connection: ConnectorConnection, payload: ConnectorResourceCreateRequest) -> tuple[bool, str, int | None]:
     provider = connection.provider
     kind = _validate_resource_kind(provider, payload.resource_kind)
+    if provider == ConnectorProvider.notion.value and kind == ConnectorResourceKind.export_upload.value:
+        return False, ConnectorSyncMode.manual.value, None
     default_sync_mode, default_interval = _default_sync_schedule_for_scope(connection.owner_scope)
     sync_mode, interval = _normalize_sync_schedule(
         payload.sync_mode or default_sync_mode,
@@ -259,6 +330,11 @@ def _google_drive_configured() -> bool:
     return bool(settings.google_oauth_client_id and settings.google_oauth_client_secret)
 
 
+def _github_configured() -> bool:
+    settings = get_settings()
+    return bool(settings.github_oauth_client_id and settings.github_oauth_client_secret)
+
+
 def _notion_configured() -> bool:
     settings = get_settings()
     return bool(settings.notion_oauth_client_id and settings.notion_oauth_client_secret)
@@ -267,6 +343,8 @@ def _notion_configured() -> bool:
 def _provider_configured(provider: str) -> bool:
     if provider == ConnectorProvider.google_drive.value:
         return _google_drive_configured()
+    if provider == ConnectorProvider.github.value:
+        return _github_configured()
     if provider == ConnectorProvider.notion.value:
         return _notion_configured()
     return False
@@ -305,6 +383,8 @@ def _resource_summary(resource: ConnectorResource) -> ConnectorResourceSummary:
         name=resource.name,
         resource_url=resource.resource_url,
         parent_external_id=resource.parent_external_id,
+        visibility_scope=resource.visibility_scope,
+        selection_mode=resource.selection_mode,
         sync_children=resource.sync_children,
         sync_mode=resource.sync_mode,
         sync_interval_minutes=resource.sync_interval_minutes,
@@ -411,6 +491,69 @@ async def _google_userinfo(access_token: str) -> dict[str, Any]:
     return response.json()
 
 
+async def _exchange_github_code(*, code: str, redirect_uri: str) -> dict[str, Any]:
+    _ensure_provider_configured(ConnectorProvider.github.value)
+    settings = get_settings()
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            GITHUB_TOKEN_URL,
+            headers={
+                "Accept": "application/json",
+            },
+            data={
+                "client_id": settings.github_oauth_client_id,
+                "client_secret": settings.github_oauth_client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+        )
+    if response.status_code >= 400:
+        raise ConnectorError(f"GitHub token exchange failed: {response.text}")
+    payload = response.json()
+    if payload.get("error"):
+        raise ConnectorError(f"GitHub token exchange failed: {payload.get('error_description') or payload['error']}")
+    return payload
+
+
+async def _github_user(access_token: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            f"{GITHUB_API_URL}/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    if response.status_code >= 400:
+        raise ConnectorError(f"GitHub user lookup failed: {response.text}")
+    return response.json()
+
+
+async def _github_primary_email(access_token: str) -> str | None:
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            f"{GITHUB_API_URL}/user/emails",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    if response.status_code >= 400:
+        return None
+    emails = response.json()
+    if not isinstance(emails, list):
+        return None
+    for email in emails:
+        if email.get("primary") and email.get("verified") and email.get("email"):
+            return str(email["email"])
+    for email in emails:
+        if email.get("verified") and email.get("email"):
+            return str(email["email"])
+    return None
+
+
 async def _exchange_notion_code(*, code: str, redirect_uri: str) -> dict[str, Any]:
     _ensure_provider_configured(ConnectorProvider.notion.value)
     settings = get_settings()
@@ -439,7 +582,7 @@ async def _active_access_token(session: AsyncSession, connection: ConnectorConne
         connection.status = ConnectorStatus.needs_reauth.value
         await session.commit()
         raise ConnectorError("Connector access token is unavailable.")
-    if connection.provider == ConnectorProvider.notion.value:
+    if connection.provider in {ConnectorProvider.github.value, ConnectorProvider.notion.value}:
         return access_token
     refresh_token = decrypt_secret(connection.encrypted_refresh_token)
     expires_at = connection.token_expires_at
@@ -496,6 +639,50 @@ async def _google_bytes(
         )
     if response.status_code >= 400:
         raise ConnectorError(f"Google Drive download failed: {response.text}")
+    return response.content
+
+
+async def _github_request(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    method: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    expected_status: int = 200,
+) -> tuple[Any, httpx.Headers]:
+    token = await _active_access_token(session, connection)
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.request(
+            method,
+            f"{GITHUB_API_URL}{path}",
+            params=params,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+    if response.status_code != expected_status:
+        if response.status_code in {401, 403}:
+            connection.status = ConnectorStatus.needs_reauth.value
+            await session.commit()
+        raise ConnectorError(f"GitHub request failed: {response.text}")
+    return response.json(), response.headers
+
+
+async def _github_raw_bytes(session: AsyncSession, connection: ConnectorConnection, download_url: str) -> bytes:
+    token = await _active_access_token(session, connection)
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        response = await client.get(
+            download_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.raw",
+            },
+        )
+    if response.status_code >= 400:
+        raise ConnectorError(f"GitHub raw file download failed: {response.text}")
     return response.content
 
 
@@ -709,6 +896,48 @@ async def _google_oauth_complete(*, code: str, code_verifier: str) -> ProviderOA
     )
 
 
+async def _github_oauth_start(session: AsyncSession, *, state: str, code_verifier: str) -> dict[str, str]:
+    del session, code_verifier
+    settings = get_settings()
+    redirect_uri = settings.github_oauth_redirect_uri or _app_callback_path("/api/connectors/github/oauth/callback")
+    params = httpx.QueryParams(
+        {
+            "client_id": settings.github_oauth_client_id,
+            "redirect_uri": redirect_uri,
+            "scope": " ".join(GITHUB_CONNECTOR_SCOPES),
+            "state": state,
+        }
+    )
+    return {"authorization_url": f"{GITHUB_AUTH_URL}?{params}", "state": state}
+
+
+async def _github_oauth_complete(*, code: str, code_verifier: str) -> ProviderOAuthResult:
+    del code_verifier
+    settings = get_settings()
+    redirect_uri = settings.github_oauth_redirect_uri or _app_callback_path("/api/connectors/github/oauth/callback")
+    token_data = await _exchange_github_code(code=code, redirect_uri=redirect_uri)
+    access_token = str(token_data["access_token"])
+    userinfo = await _github_user(access_token)
+    account_email = userinfo.get("email")
+    if not account_email:
+        account_email = await _github_primary_email(access_token)
+    granted_scopes = [
+        scope
+        for scope in str(token_data.get("scope") or "").replace(",", " ").split()
+        if scope
+    ] or list(GITHUB_CONNECTOR_SCOPES)
+    login = str(userinfo.get("login") or userinfo.get("name") or "account")
+    return ProviderOAuthResult(
+        account_subject=str(userinfo.get("id") or login),
+        display_name=f"GitHub ({login})",
+        account_email=str(account_email) if account_email else None,
+        encrypted_access_token=encrypt_secret(access_token) or "",
+        encrypted_refresh_token=None,
+        token_expires_at=None,
+        granted_scopes=granted_scopes,
+    )
+
+
 async def _notion_oauth_start(session: AsyncSession, *, state: str, code_verifier: str) -> dict[str, str]:
     del session, code_verifier
     params = httpx.QueryParams(
@@ -745,6 +974,8 @@ async def _notion_oauth_complete(*, code: str, code_verifier: str) -> ProviderOA
 async def _start_oauth_for_provider(session: AsyncSession, *, provider: str, state: str, code_verifier: str) -> dict[str, str]:
     if provider == ConnectorProvider.google_drive.value:
         return await _google_oauth_start(session, state=state, code_verifier=code_verifier)
+    if provider == ConnectorProvider.github.value:
+        return await _github_oauth_start(session, state=state, code_verifier=code_verifier)
     if provider == ConnectorProvider.notion.value:
         return await _notion_oauth_start(session, state=state, code_verifier=code_verifier)
     raise ConnectorError("Unsupported connector provider.")
@@ -753,6 +984,8 @@ async def _start_oauth_for_provider(session: AsyncSession, *, provider: str, sta
 async def _complete_oauth_for_provider(*, provider: str, code: str, code_verifier: str) -> ProviderOAuthResult:
     if provider == ConnectorProvider.google_drive.value:
         return await _google_oauth_complete(code=code, code_verifier=code_verifier)
+    if provider == ConnectorProvider.github.value:
+        return await _github_oauth_complete(code=code, code_verifier=code_verifier)
     if provider == ConnectorProvider.notion.value:
         return await _notion_oauth_complete(code=code, code_verifier=code_verifier)
     raise ConnectorError("Unsupported connector provider.")
@@ -997,6 +1230,320 @@ async def _notion_search(
     )
 
 
+def _github_doc_path_supported(path: str) -> bool:
+    normalized = path.strip("/")
+    lower = normalized.lower()
+    if not normalized:
+        return False
+    name = lower.rsplit("/", 1)[-1]
+    if "/" not in normalized and name.startswith("readme"):
+        return "." not in name or lower.endswith(tuple(GITHUB_DOC_EXTENSIONS))
+    if not (lower.startswith("docs/") or lower.startswith("doc/")):
+        return False
+    return any(lower.endswith(extension) for extension in GITHUB_DOC_EXTENSIONS)
+
+
+def _github_evidence_path_excluded(path: str) -> bool:
+    lower = path.lower()
+    excluded_segments = {
+        ".git",
+        ".github",
+        ".next",
+        ".venv",
+        "__pycache__",
+        "build",
+        "coverage",
+        "dist",
+        "node_modules",
+        "target",
+        "tmp",
+        "vendor",
+    }
+    parts = {part for part in PurePosixPath(lower).parts if part}
+    return bool(parts & excluded_segments)
+
+
+def _github_probably_binary(raw_content: bytes) -> bool:
+    if not raw_content:
+        return False
+    if b"\x00" in raw_content[:2048]:
+        return True
+    try:
+        raw_content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _github_document_content_type(path: str) -> str:
+    lower = path.lower()
+    if lower.endswith((".md", ".mdx")) or lower.rsplit("/", 1)[-1].startswith("readme"):
+        return "markdown"
+    return "text"
+
+
+def _github_document_title(repo_name: str, path: str) -> str:
+    return f"{repo_name} · {path}"
+
+
+def _github_evidence_title(repo_name: str, path: str) -> str:
+    return f"{repo_name} · 근거 · {path}"
+
+
+def _notion_export_title(path: str) -> str:
+    normalized = path.replace("\\", "/").strip("/")
+    if not normalized:
+        return "Notion export"
+    return normalized.rsplit("/", 1)[-1].rsplit(".", 1)[0] or "Notion export"
+
+
+def _notion_export_supported_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    if not normalized or normalized.startswith("__macosx/"):
+        return False
+    suffix = PurePosixPath(normalized).suffix.lower()
+    return suffix in NOTION_EXPORT_EXTENSIONS
+
+
+def _notion_export_content_type(path: str) -> str:
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        return "markdown"
+    if suffix in {".html", ".htm"}:
+        return "html"
+    return "text"
+
+
+def _iter_notion_export_items(filename: str, raw_bytes: bytes) -> list[PreparedSyncItem]:
+    items: list[PreparedSyncItem] = []
+    if filename.lower().endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                if not _notion_export_supported_path(member.filename):
+                    continue
+                content = archive.read(member.filename).decode("utf-8-sig", errors="ignore")
+                items.append(
+                    PreparedSyncItem(
+                        external_item_id=member.filename,
+                        title=_notion_export_title(member.filename),
+                        source_url=None,
+                        source_revision_id=None,
+                        mime_type="application/octet-stream",
+                        content_type=_notion_export_content_type(member.filename),
+                        content=content,
+                        doc_type="knowledge",
+                        provider_metadata={
+                            "notion_export_path": member.filename,
+                            "corpus_role": "glossary_evidence",
+                        },
+                    )
+                )
+        return items
+
+    content = raw_bytes.decode("utf-8-sig", errors="ignore")
+    if not content.strip():
+        return items
+    items.append(
+        PreparedSyncItem(
+            external_item_id=filename,
+            title=_notion_export_title(filename),
+            source_url=None,
+            source_revision_id=None,
+            mime_type="application/octet-stream",
+            content_type=_notion_export_content_type(filename),
+            content=content,
+            doc_type="knowledge",
+            provider_metadata={
+                "notion_export_path": filename,
+                "corpus_role": "glossary_evidence",
+            },
+        )
+    )
+    return items
+
+
+def _github_has_next_page(headers: httpx.Headers) -> bool:
+    link = headers.get("Link") or headers.get("link") or ""
+    return 'rel="next"' in link
+
+
+async def _github_search_repositories(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    *,
+    kind: str,
+    query: str | None,
+    cursor: str | None,
+) -> ConnectorBrowseResponse:
+    try:
+        page = max(int(cursor or "1"), 1)
+    except ValueError:
+        page = 1
+    payload, headers = await _github_request(
+        session,
+        connection,
+        "GET",
+        "/user/repos",
+        params={
+            "per_page": 50,
+            "page": page,
+            "sort": "updated",
+            "affiliation": "owner,collaborator,organization_member",
+        },
+    )
+    repositories = payload if isinstance(payload, list) else []
+    normalized_query = (query or "").strip().lower()
+    items: list[ConnectorBrowseItem] = []
+    for repository in repositories:
+        if not isinstance(repository, dict):
+            continue
+        full_name = str(repository.get("full_name") or "")
+        owner = str((repository.get("owner") or {}).get("login") or "")
+        repo = str(repository.get("name") or "")
+        if not owner or not repo or not full_name:
+            continue
+        haystack = " ".join(
+            filter(
+                None,
+                [
+                    full_name.lower(),
+                    repo.lower(),
+                    str(repository.get("description") or "").lower(),
+                ],
+            )
+        )
+        if normalized_query and normalized_query not in haystack:
+            continue
+        items.append(
+            ConnectorBrowseItem(
+                id=full_name,
+                name=full_name,
+                resource_kind=kind,
+                resource_url=repository.get("html_url"),
+                has_children=False,
+                provider_metadata={
+                    "owner": owner,
+                    "repo": repo,
+                    "default_branch": repository.get("default_branch"),
+                    "archived": bool(repository.get("archived")),
+                },
+            )
+        )
+    next_cursor = str(page + 1) if _github_has_next_page(headers) else None
+    return ConnectorBrowseResponse(
+        kind=kind,
+        items=items,
+        cursor=next_cursor,
+        has_more=next_cursor is not None,
+    )
+
+
+async def _github_sync_items(
+    session: AsyncSession,
+    connection: ConnectorConnection,
+    resource: ConnectorResource,
+) -> list[PreparedSyncItem]:
+    if resource.resource_kind not in {
+        ConnectorResourceKind.repository_docs.value,
+        ConnectorResourceKind.repository_evidence.value,
+    }:
+        raise ConnectorError("Unsupported GitHub resource kind.")
+    metadata = dict(resource.provider_metadata or {})
+    owner = str(metadata.get("owner") or "")
+    repo = str(metadata.get("repo") or "")
+    if (not owner or not repo) and "/" in resource.external_id:
+        owner, repo = resource.external_id.split("/", 1)
+    if not owner or not repo:
+        raise ConnectorError("GitHub repository identifier is invalid.")
+
+    repository, _headers = await _github_request(session, connection, "GET", f"/repos/{owner}/{repo}")
+    default_branch = str(metadata.get("default_branch") or repository.get("default_branch") or "main")
+    repo_name = str(repository.get("name") or repo)
+    repo_html_url = str(repository.get("html_url") or f"https://github.com/{owner}/{repo}")
+
+    tree_ref = quote(default_branch, safe="")
+    tree_payload, _tree_headers = await _github_request(
+        session,
+        connection,
+        "GET",
+        f"/repos/{owner}/{repo}/git/trees/{tree_ref}",
+        params={"recursive": "1"},
+    )
+    tree_items = tree_payload.get("tree") or []
+    if resource.resource_kind == ConnectorResourceKind.repository_docs.value:
+        candidate_paths = sorted(
+            str(item.get("path"))
+            for item in tree_items
+            if isinstance(item, dict)
+            and item.get("type") == "blob"
+            and _github_doc_path_supported(str(item.get("path") or ""))
+        )
+    else:
+        candidate_paths = sorted(
+            str(item.get("path"))
+            for item in tree_items
+            if isinstance(item, dict)
+            and item.get("type") == "blob"
+            and not _github_evidence_path_excluded(str(item.get("path") or ""))
+        )
+
+    prepared: list[PreparedSyncItem] = []
+    for path in candidate_paths:
+        encoded_path = quote(path, safe="/")
+        file_payload, _file_headers = await _github_request(
+            session,
+            connection,
+            "GET",
+            f"/repos/{owner}/{repo}/contents/{encoded_path}",
+            params={"ref": default_branch},
+        )
+        if isinstance(file_payload, list):
+            continue
+        raw_content: bytes
+        if file_payload.get("content") and file_payload.get("encoding") == "base64":
+            raw_content = base64.b64decode(str(file_payload["content"]).encode("utf-8"))
+        elif file_payload.get("download_url"):
+            raw_content = await _github_raw_bytes(session, connection, str(file_payload["download_url"]))
+        else:
+            raise ConnectorError(f"GitHub file content is unavailable for {path}.")
+        if resource.resource_kind == ConnectorResourceKind.repository_evidence.value and _github_probably_binary(raw_content):
+            continue
+        content = raw_content.decode("utf-8-sig", errors="ignore")
+        canonical_url = str(file_payload.get("html_url") or f"{repo_html_url}/blob/{default_branch}/{path}")
+        content_type = _github_document_content_type(path)
+        prepared.append(
+            PreparedSyncItem(
+                external_item_id=path,
+                title=(
+                    _github_document_title(repo_name, path)
+                    if resource.resource_kind == ConnectorResourceKind.repository_docs.value
+                    else _github_evidence_title(repo_name, path)
+                ),
+                source_url=canonical_url,
+                source_revision_id=str(file_payload.get("sha") or ""),
+                mime_type="text/markdown" if content_type == "markdown" else "text/plain",
+                content_type="markdown" if path.lower().endswith((".md", ".mdx")) else "text",
+                content=content,
+                doc_type="knowledge",
+                provider_metadata={
+                    "github_owner": owner,
+                    "github_repo": repo,
+                    "github_path": path,
+                    "github_default_branch": default_branch,
+                    "github_html_url": canonical_url,
+                    "corpus_role": (
+                        "docs"
+                        if resource.resource_kind == ConnectorResourceKind.repository_docs.value
+                        else "glossary_evidence"
+                    ),
+                },
+            )
+        )
+    return prepared
+
+
 async def _google_sync_items(
     session: AsyncSession,
     connection: ConnectorConnection,
@@ -1135,6 +1682,8 @@ async def _browse_for_provider(
 ) -> ConnectorBrowseResponse:
     if connection.provider == ConnectorProvider.google_drive.value:
         return await _google_browse(session, connection, kind=kind, parent_id=parent_id, container_id=container_id)
+    if connection.provider == ConnectorProvider.github.value:
+        return await _github_search_repositories(session, connection, kind=kind, query=query, cursor=cursor)
     if connection.provider == ConnectorProvider.notion.value:
         return await _notion_search(session, connection, kind=kind, query=query, cursor=cursor)
     raise ConnectorError("Unsupported connector provider.")
@@ -1147,6 +1696,8 @@ async def _sync_items_for_resource(
 ) -> list[PreparedSyncItem]:
     if connection.provider == ConnectorProvider.google_drive.value:
         return await _google_sync_items(session, connection, resource)
+    if connection.provider == ConnectorProvider.github.value:
+        return await _github_sync_items(session, connection, resource)
     if connection.provider == ConnectorProvider.notion.value:
         return await _notion_sync_items(session, connection, resource)
     raise ConnectorError("Unsupported connector provider.")
@@ -1192,7 +1743,7 @@ async def get_connectors_readiness(
 ) -> ConnectorReadinessResponse:
     items: list[ConnectorProviderReadiness] = []
     workspace_id = auth_user.current_workspace_id if auth_user is not None else None
-    for provider in [ConnectorProvider.google_drive.value, ConnectorProvider.notion.value]:
+    for provider in [ConnectorProvider.google_drive.value, ConnectorProvider.github.value, ConnectorProvider.notion.value]:
         workspace_connection: ConnectorConnection | None = None
         healthy_source_count = 0
         needs_attention_count = 0
@@ -1468,6 +2019,8 @@ async def create_resource(
     if connection.owner_scope == ConnectorOwnerScope.workspace.value:
         _ensure_scope_permission(connection.owner_scope, auth_user)
     resource_kind = _validate_resource_kind(connection.provider, payload.resource_kind)
+    visibility_scope = _normalize_visibility_scope(connection.provider, resource_kind, payload.visibility_scope)
+    selection_mode = _normalize_selection_mode(connection.provider, resource_kind, payload.selection_mode)
     sync_children, sync_mode, interval = _resource_sync_defaults(connection, payload)
     existing = (
         await session.execute(
@@ -1486,6 +2039,8 @@ async def create_resource(
         name=payload.name,
         resource_url=payload.resource_url,
         parent_external_id=payload.parent_external_id,
+        visibility_scope=visibility_scope,
+        selection_mode=selection_mode,
         sync_children=sync_children,
         sync_mode=sync_mode,
         sync_interval_minutes=interval,
@@ -1499,12 +2054,67 @@ async def create_resource(
         resource.name = payload.name
         resource.resource_url = payload.resource_url
         resource.parent_external_id = payload.parent_external_id
+        resource.visibility_scope = visibility_scope
+        resource.selection_mode = selection_mode
         resource.sync_children = sync_children
         resource.sync_mode = sync_mode
         resource.sync_interval_minutes = interval
         resource.next_auto_sync_at = future_utc(seconds=interval * 60) if sync_mode == ConnectorSyncMode.auto.value and interval else None
         resource.status = ConnectorResourceStatus.active.value
         resource.provider_metadata = payload.provider_metadata
+    await session.commit()
+    await session.refresh(resource)
+    return _resource_summary(resource)
+
+
+async def import_notion_export_resource(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser,
+    connection_id: UUID,
+    *,
+    name: str,
+    filename: str,
+    content_bytes: bytes,
+    visibility_scope: str | None = None,
+) -> ConnectorResourceSummary:
+    connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    if connection.owner_scope == ConnectorOwnerScope.workspace.value:
+        _ensure_scope_permission(connection.owner_scope, auth_user)
+    if connection.provider != ConnectorProvider.notion.value:
+        raise ConnectorError("Notion export upload is only supported for Notion connections.")
+
+    resource_kind = ConnectorResourceKind.export_upload.value
+    normalized_visibility = _normalize_visibility_scope(connection.provider, resource_kind, visibility_scope)
+    resource = ConnectorResource(
+        connection_id=connection.id,
+        provider=connection.provider,
+        resource_kind=resource_kind,
+        external_id=f"export:{uuid4()}",
+        name=name.strip() or _notion_export_title(filename),
+        resource_url=None,
+        parent_external_id=None,
+        visibility_scope=normalized_visibility,
+        selection_mode="export_upload",
+        sync_children=False,
+        sync_mode=ConnectorSyncMode.manual.value,
+        sync_interval_minutes=None,
+        status=ConnectorResourceStatus.active.value,
+        next_auto_sync_at=None,
+        provider_metadata={"upload_filename": filename},
+        last_sync_started_at=utcnow(),
+    )
+    session.add(resource)
+    await session.flush()
+
+    sync_items = _iter_notion_export_items(filename, content_bytes)
+    counts = await _ingest_sync_items_for_resource(
+        session,
+        connection=connection,
+        resource=resource,
+        sync_items=sync_items,
+    )
+    resource.last_sync_completed_at = utcnow()
+    resource.last_sync_summary = counts
     await session.commit()
     await session.refresh(resource)
     return _resource_summary(resource)
@@ -1523,10 +2133,22 @@ async def update_resource(
     resource = await _get_resource_or_raise(session, resource_id)
     if resource.connection_id != connection.id:
         raise ConnectorNotFoundError("Connector resource does not belong to the connection.")
+    if payload.visibility_scope is not None:
+        resource.visibility_scope = _normalize_visibility_scope(connection.provider, resource.resource_kind, payload.visibility_scope)
+    if payload.selection_mode is not None:
+        resource.selection_mode = _normalize_selection_mode(connection.provider, resource.resource_kind, payload.selection_mode)
     resource.sync_children = _resource_sync_children_for_update(resource, payload.sync_children)
     if payload.status is not None:
         resource.status = payload.status
-    if payload.sync_mode is not None or payload.sync_interval_minutes is not None:
+    if not _resource_supports_connector_sync(resource):
+        if payload.sync_mode is not None and payload.sync_mode != ConnectorSyncMode.manual.value:
+            raise ConnectorError(_non_syncable_resource_message(resource))
+        if payload.sync_interval_minutes is not None:
+            raise ConnectorError(_non_syncable_resource_message(resource))
+        resource.sync_mode = ConnectorSyncMode.manual.value
+        resource.sync_interval_minutes = None
+        resource.next_auto_sync_at = None
+    elif payload.sync_mode is not None or payload.sync_interval_minutes is not None:
         sync_mode, interval = _normalize_sync_schedule(
             payload.sync_mode or resource.sync_mode,
             payload.sync_interval_minutes if payload.sync_interval_minutes is not None else resource.sync_interval_minutes,
@@ -1617,6 +2239,8 @@ async def request_resource_sync(
     resource = await _get_resource_or_raise(session, resource_id)
     if resource.connection_id != connection.id:
         raise ConnectorNotFoundError("Connector resource does not belong to the connection.")
+    if not _resource_supports_connector_sync(resource):
+        raise ConnectorError(_non_syncable_resource_message(resource))
     job = await enqueue_connector_sync_job(
         session,
         connection.id,
@@ -1659,7 +2283,14 @@ async def enqueue_due_sync_jobs(session: AsyncSession, *, limit: int = 10) -> in
         ).scalars().all()
     )
     created = 0
+    corrected = 0
     for resource in due_resources:
+        if not _resource_supports_connector_sync(resource):
+            resource.sync_mode = ConnectorSyncMode.manual.value
+            resource.sync_interval_minutes = None
+            resource.next_auto_sync_at = None
+            corrected += 1
+            continue
         existing = (
             await session.execute(
                 select(ConnectorSyncJob).where(
@@ -1678,7 +2309,7 @@ async def enqueue_due_sync_jobs(session: AsyncSession, *, limit: int = 10) -> in
             priority=95,
         )
         created += 1
-    if created:
+    if created or corrected:
         await session.commit()
     return created
 
@@ -1810,6 +2441,120 @@ async def _archive_document_if_unreferenced(session: AsyncSession, document_id: 
         await session.flush()
 
 
+async def _ingest_sync_items_for_resource(
+    session: AsyncSession,
+    *,
+    connection: ConnectorConnection,
+    resource: ConnectorResource,
+    sync_items: list[PreparedSyncItem],
+) -> dict[str, int]:
+    seen_ids = {item.external_item_id for item in sync_items}
+    counts = {"imported": 0, "unchanged": 0, "unsupported": 0, "failed": 0, "deleted": 0}
+
+    for item in sync_items:
+        try:
+            if item.unsupported_reason:
+                counts["unsupported"] += 1
+                await _upsert_source_item(
+                    session,
+                    connection_id=connection.id,
+                    resource_id=resource.id,
+                    item=item,
+                    document_id=None,
+                    status=ConnectorSourceItemStatus.unsupported.value,
+                    unsupported_reason=item.unsupported_reason,
+                )
+                await session.commit()
+                continue
+
+            if not item.content or not item.content.strip():
+                raise ConnectorError("Extracted content is empty.")
+
+            payload = IngestDocumentRequest(
+                source_system=(
+                    "google-drive"
+                    if connection.provider == ConnectorProvider.google_drive.value
+                    else "github"
+                    if connection.provider == ConnectorProvider.github.value
+                    else "notion-export"
+                    if resource.selection_mode == "export_upload"
+                    else "notion"
+                ),
+                source_external_id=item.external_item_id,
+                source_revision_id=item.source_revision_id,
+                source_url=item.source_url,
+                slug=_stable_document_slug(item.title, item.external_item_id),
+                title=item.title,
+                content_type=item.content_type,  # type: ignore[arg-type]
+                content=item.content,
+                doc_type=item.doc_type,
+                language_code="ko",
+                status="published",
+                visibility_scope=resource.visibility_scope,  # type: ignore[arg-type]
+                metadata={
+                    "provider": connection.provider,
+                    "connector_connection_id": str(connection.id),
+                    "connector_resource_id": str(resource.id),
+                    "selection_mode": resource.selection_mode,
+                    "visibility_scope": resource.visibility_scope,
+                    **item.provider_metadata,
+                },
+                priority=110,
+            )
+            result = await ingest_document(session, payload)
+            status = ConnectorSourceItemStatus.unchanged.value if result.unchanged else ConnectorSourceItemStatus.imported.value
+            counts["unchanged" if result.unchanged else "imported"] += 1
+            await _upsert_source_item(
+                session,
+                connection_id=connection.id,
+                resource_id=resource.id,
+                item=item,
+                document_id=result.document.id,
+                status=status,
+            )
+        except ConnectorError as exc:
+            counts["unsupported"] += 1
+            await _upsert_source_item(
+                session,
+                connection_id=connection.id,
+                resource_id=resource.id,
+                item=item,
+                document_id=None,
+                status=ConnectorSourceItemStatus.unsupported.value,
+                unsupported_reason=str(exc),
+            )
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            counts["failed"] += 1
+            await _upsert_source_item(
+                session,
+                connection_id=connection.id,
+                resource_id=resource.id,
+                item=item,
+                document_id=None,
+                status=ConnectorSourceItemStatus.failed.value,
+                error_message=str(exc),
+            )
+            await session.commit()
+
+    existing_items = list(
+        (
+            await session.execute(
+                select(ConnectorSourceItem).where(ConnectorSourceItem.resource_id == resource.id)
+            )
+        ).scalars().all()
+    )
+    for item in existing_items:
+        if item.external_item_id in seen_ids:
+            continue
+        item.item_status = ConnectorSourceItemStatus.deleted.value
+        item.last_synced_at = utcnow()
+        counts["deleted"] += 1
+        await _archive_document_if_unreferenced(session, item.internal_document_id)
+
+    return counts
+
+
 async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSession], job_id: UUID) -> None:
     async with session_factory() as session:
         job = await session.get(ConnectorSyncJob, job_id)
@@ -1823,98 +2568,12 @@ async def process_connector_sync_job(session_factory: async_sessionmaker[AsyncSe
         await session.commit()
 
         sync_items = await _sync_items_for_resource(session, connection, resource)
-        seen_ids = {item.external_item_id for item in sync_items}
-        counts = {"imported": 0, "unchanged": 0, "unsupported": 0, "failed": 0, "deleted": 0}
-
-        for item in sync_items:
-            try:
-                if item.unsupported_reason:
-                    counts["unsupported"] += 1
-                    await _upsert_source_item(
-                        session,
-                        connection_id=connection.id,
-                        resource_id=resource.id,
-                        item=item,
-                        document_id=None,
-                        status=ConnectorSourceItemStatus.unsupported.value,
-                        unsupported_reason=item.unsupported_reason,
-                    )
-                    await session.commit()
-                    continue
-
-                if not item.content or not item.content.strip():
-                    raise ConnectorError("Extracted content is empty.")
-
-                payload = IngestDocumentRequest(
-                    source_system="google-drive" if connection.provider == ConnectorProvider.google_drive.value else "notion",
-                    source_external_id=item.external_item_id,
-                    source_revision_id=item.source_revision_id,
-                    source_url=item.source_url,
-                    slug=_stable_document_slug(item.title, item.external_item_id),
-                    title=item.title,
-                    content_type=item.content_type,  # type: ignore[arg-type]
-                    content=item.content,
-                    doc_type=item.doc_type,
-                    language_code="ko",
-                    status="published",
-                    metadata={
-                        "provider": connection.provider,
-                        "connector_connection_id": str(connection.id),
-                        "connector_resource_id": str(resource.id),
-                        **item.provider_metadata,
-                    },
-                    priority=110,
-                )
-                result = await ingest_document(session, payload)
-                status = ConnectorSourceItemStatus.unchanged.value if result.unchanged else ConnectorSourceItemStatus.imported.value
-                counts["unchanged" if result.unchanged else "imported"] += 1
-                await _upsert_source_item(
-                    session,
-                    connection_id=connection.id,
-                    resource_id=resource.id,
-                    item=item,
-                    document_id=result.document.id,
-                    status=status,
-                )
-            except ConnectorError as exc:
-                counts["unsupported"] += 1
-                await _upsert_source_item(
-                    session,
-                    connection_id=connection.id,
-                    resource_id=resource.id,
-                    item=item,
-                    document_id=None,
-                    status=ConnectorSourceItemStatus.unsupported.value,
-                    unsupported_reason=str(exc),
-                )
-                await session.commit()
-            except Exception as exc:  # noqa: BLE001
-                counts["failed"] += 1
-                await _upsert_source_item(
-                    session,
-                    connection_id=connection.id,
-                    resource_id=resource.id,
-                    item=item,
-                    document_id=None,
-                    status=ConnectorSourceItemStatus.failed.value,
-                    error_message=str(exc),
-                )
-                await session.commit()
-
-        existing_items = list(
-            (
-                await session.execute(
-                    select(ConnectorSourceItem).where(ConnectorSourceItem.resource_id == resource.id)
-                )
-            ).scalars().all()
+        counts = await _ingest_sync_items_for_resource(
+            session,
+            connection=connection,
+            resource=resource,
+            sync_items=sync_items,
         )
-        for item in existing_items:
-            if item.external_item_id in seen_ids:
-                continue
-            item.item_status = ConnectorSourceItemStatus.deleted.value
-            item.last_synced_at = utcnow()
-            counts["deleted"] += 1
-            await _archive_document_if_unreferenced(session, item.internal_document_id)
 
         resource.last_sync_completed_at = utcnow()
         resource.last_sync_summary = counts

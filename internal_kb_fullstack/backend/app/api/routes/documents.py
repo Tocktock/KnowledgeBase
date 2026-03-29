@@ -53,6 +53,7 @@ def _document_summary(document: Document) -> DocumentSummary:
         language_code=document.language_code,
         doc_type=document.doc_type,
         status=document.status,
+        visibility_scope=document.visibility_scope,
         owner_team=document.owner_team,
         metadata=document.meta,
         current_revision_id=document.current_revision_id,
@@ -170,6 +171,7 @@ async def upload_document_route(
     language_code: str = Form(default="ko"),
     owner_team: str | None = Form(default=None),
     status_value: str = Form(default="published", alias="status"),
+    visibility_scope: str = Form(default="member_visible"),
     session: AsyncSession = Depends(get_db_session),
 ) -> IngestDocumentResponse:
     parser = DocumentParser()
@@ -188,6 +190,7 @@ async def upload_document_route(
         language_code=language_code,
         owner_team=owner_team,
         status=status_value,  # type: ignore[arg-type]
+        visibility_scope=visibility_scope,  # type: ignore[arg-type]
     )
     result = await ingest_document(session, payload)
     return IngestDocumentResponse(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -12,9 +12,12 @@ from app.db.models import (
     ConnectorOwnerScope,
     ConnectorProvider,
     ConnectorResource,
+    ConnectorResourceStatus,
     ConnectorStatus,
     ConnectorSyncJob,
+    GlossaryValidationRun,
     JobStatus,
+    KnowledgeConcept,
     User,
     Workspace,
     WorkspaceInvitation,
@@ -38,7 +41,7 @@ from app.schemas.workspace import (
 )
 from app.services.auth import AuthenticatedUser, current_workspace_summary, set_current_workspace_for_session
 from app.services.catalog import list_documents
-from app.services.glossary import list_glossary_concepts
+from app.services.glossary import _validation_run_summary, list_glossary_concepts
 from app.services.trust import build_document_trust
 
 WORKSPACE_ADMIN_ROLES = {WorkspaceMembershipRole.owner.value, WorkspaceMembershipRole.admin.value}
@@ -165,6 +168,8 @@ async def get_workspace_overview(
     rows, _total = await list_documents(session, limit=6)
     featured_docs = [_document_list_item(row) for row in rows]
     featured_concepts = (await list_glossary_concepts(session, status_filter="approved", limit=6)).items
+    latest_validation_run = None
+    review_required_count = 0
 
     if auth_user is None or auth_user.current_workspace_id is None:
         return WorkspaceOverviewResponse(
@@ -173,8 +178,8 @@ async def get_workspace_overview(
             featured_concepts=featured_concepts,
             setup_state="anonymous",
             next_actions=[
-                "Sign in to connect workspace sources.",
-                "Search synced knowledge without learning connector internals.",
+                "로그인하고 워크스페이스 지식 레이어를 시작하세요.",
+                "구성원은 연결 구조를 몰라도 검색과 문서 탐색으로 바로 답을 찾을 수 있습니다.",
             ],
         )
 
@@ -211,16 +216,33 @@ async def get_workspace_overview(
         ).scalars().all()
     ) if workspace_connection_ids else []
     resources_by_id = {resource.id: resource for resource in resources}
+    latest_validation_run_row = (
+        await session.execute(
+            select(GlossaryValidationRun)
+            .where(GlossaryValidationRun.workspace_id == workspace_id)
+            .order_by(GlossaryValidationRun.requested_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest_validation_run_row is not None:
+        latest_validation_run = _validation_run_summary(latest_validation_run_row)
+    review_required_count = int(
+        (
+            await session.execute(
+                select(func.count(KnowledgeConcept.id)).where(KnowledgeConcept.review_required.is_(True))
+            ).scalar_one()
+        )
+    )
 
     healthy_source_count = sum(
         1
         for resource in resources
-        if resource.status == ConnectorStatus.active.value and int((resource.last_sync_summary or {}).get("failed", 0)) == 0
+        if resource.status == ConnectorResourceStatus.active.value and int((resource.last_sync_summary or {}).get("failed", 0)) == 0
     )
     needs_attention_count = sum(
         1
         for resource in resources
-        if resource.status != ConnectorStatus.active.value or int((resource.last_sync_summary or {}).get("failed", 0)) > 0
+        if resource.status != ConnectorResourceStatus.active.value or int((resource.last_sync_summary or {}).get("failed", 0)) > 0
     ) + sum(1 for connection in workspace_connections if connection.status != ConnectorStatus.active.value)
     providers_needing_attention = sorted(
         {
@@ -233,7 +255,7 @@ async def get_workspace_overview(
     if not workspace_connections:
         setup_state = "setup_needed"
         next_actions = [
-            "Google Drive 또는 Notion을 연결해 워크스페이스 지식 레이어를 시작하세요.",
+            "Google Drive, GitHub, Notion 중 하나를 연결해 워크스페이스 지식 레이어를 시작하세요.",
             "낮은 수준의 연결 리소스 대신 팀용 템플릿부터 선택하세요.",
         ]
     elif needs_attention_count > 0:
@@ -246,7 +268,7 @@ async def get_workspace_overview(
         setup_state = "ready"
         next_actions = [
             "검색과 문서 탐색을 워크스페이스 기본 진입점으로 사용하세요.",
-            "핵심 개념은 품질 이슈가 생길 때만 보강해도 충분합니다.",
+            "지식 검수에서 변경된 용어 정의만 검토해도 충분합니다.",
         ]
 
     sync_issue_summaries = [
@@ -281,6 +303,8 @@ async def get_workspace_overview(
         featured_docs=featured_docs,
         featured_concepts=featured_concepts,
         recent_sync_issues=sync_issue_summaries,
+        latest_validation_run=latest_validation_run,
+        review_required_count=review_required_count,
     )
 
 

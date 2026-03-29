@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api.deps import get_authenticated_user
 from app.api.routes import glossary as glossary_route
 from app.api.routes import search as search_route
 from app.db.engine import get_db_session
@@ -16,9 +17,11 @@ from app.schemas.glossary import (
     GlossaryConceptDocumentLink,
     GlossaryConceptSummary,
     GlossarySupportItem,
+    GlossaryValidationRunSummary,
 )
 from app.schemas.search import SearchExplainResponse, SearchHit, SearchResponse
 from app.schemas.trust import TrustSummary
+from app.services.auth import AuthenticatedUser
 from app.services.glossary import GlossaryNotFoundError
 
 
@@ -64,6 +67,11 @@ def make_glossary_summary() -> GlossaryConceptSummary:
         support_doc_count=4,
         support_chunk_count=9,
         status="drafted",
+        validation_state="missing_draft",
+        validation_reason="센디 차량은 근거는 충분하지만 작업 초안이 아직 없습니다.",
+        last_validated_at=datetime.now(timezone.utc),
+        review_required=True,
+        last_validation_run_id=uuid4(),
         owner_team_hint="product",
         source_system_mix=["notion-export"],
         generated_document=generated_doc,
@@ -114,6 +122,17 @@ def make_glossary_detail() -> GlossaryConceptDetailResponse:
             )
         ],
         related_concepts=[],
+    )
+
+
+def make_auth_user(*, role: str = "owner") -> AuthenticatedUser:
+    return AuthenticatedUser(
+        user=SimpleNamespace(id=uuid4(), email="owner@example.com", name="Owner", avatar_url=None),
+        roles=["member"],
+        current_workspace_id=uuid4(),
+        current_workspace_slug="default",
+        current_workspace_name="Default Workspace",
+        current_workspace_role=role,
     )
 
 
@@ -209,6 +228,7 @@ async def test_search_explain_route_returns_debug_surface(monkeypatch: pytest.Mo
 @pytest.mark.asyncio
 async def test_glossary_refresh_route_returns_queued_job(monkeypatch: pytest.MonkeyPatch) -> None:
     session = StubSession()
+    auth_user = make_auth_user(role="owner")
 
     async def override_session():
         yield session
@@ -232,6 +252,7 @@ async def test_glossary_refresh_route_returns_queued_job(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(glossary_route, "enqueue_glossary_refresh_job", fake_enqueue_glossary_refresh_job)
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -245,6 +266,51 @@ async def test_glossary_refresh_route_returns_queued_job(monkeypatch: pytest.Mon
     assert payload["title"] == "Glossary refresh (incremental)"
     assert session.commit_calls == 1
     assert session.refresh_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_create_validation_run_route_returns_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_user = make_auth_user(role="admin")
+
+    async def override_session():
+        yield object()
+
+    async def fake_create_glossary_validation_run(_session: object, *, workspace_id, requested_by_user_id, payload):
+        assert workspace_id == auth_user.current_workspace_id
+        assert requested_by_user_id == auth_user.user.id
+        assert payload.mode == "sync_validate_impacted"
+        return GlossaryValidationRunSummary(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            requested_by_user_id=requested_by_user_id,
+            mode="sync_validate_impacted",
+            status="queued",
+            target_concept_id=None,
+            source_scope="workspace_active",
+            selected_resource_ids=[],
+            source_sync_summary={"queued": 3},
+            validation_summary={"updated_concepts": 0},
+            linked_job_ids=[str(uuid4())],
+            error_message=None,
+            requested_at=datetime.now(timezone.utc),
+            started_at=None,
+            finished_at=None,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(glossary_route, "create_glossary_validation_run", fake_create_glossary_validation_run)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/v1/glossary/validation-runs", json={"mode": "sync_validate_impacted"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 202
+    assert response.json()["mode"] == "sync_validate_impacted"
+    assert response.json()["status"] == "queued"
 
 
 @pytest.mark.asyncio
@@ -272,6 +338,7 @@ async def test_glossary_by_slug_route_maps_not_found(monkeypatch: pytest.MonkeyP
 async def test_glossary_draft_route_returns_generated_detail(monkeypatch: pytest.MonkeyPatch) -> None:
     session = StubSession()
     detail = make_glossary_detail()
+    auth_user = make_auth_user(role="owner")
 
     async def override_session():
         yield session
@@ -281,6 +348,7 @@ async def test_glossary_draft_route_returns_generated_detail(monkeypatch: pytest
 
     monkeypatch.setattr(glossary_route, "create_or_regenerate_glossary_draft", fake_create_or_regenerate_glossary_draft)
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:

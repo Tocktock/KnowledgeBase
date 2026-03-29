@@ -17,6 +17,7 @@ export type DocumentSummary = {
   language_code: string
   doc_type: string
   status: string
+  visibility_scope: string
   owner_team?: string | null
   metadata: Record<string, unknown>
   current_revision_id?: string | null
@@ -186,6 +187,11 @@ export type GlossaryConceptSummary = {
   support_doc_count: number
   support_chunk_count: number
   status: string
+  validation_state: string
+  validation_reason?: string | null
+  last_validated_at?: string | null
+  review_required: boolean
+  last_validation_run_id?: string | null
   owner_team_hint?: string | null
   source_system_mix: string[]
   generated_document?: GlossaryConceptDocumentLink | null
@@ -230,6 +236,35 @@ export type GlossaryConceptListResponse = {
 
 export type GlossaryRefreshRequest = {
   scope?: 'full' | 'incremental'
+}
+
+export type GlossaryValidationRunCreateRequest = {
+  mode?: 'sync_validate_impacted' | 'sync_validate_full' | 'validate_term'
+  target_concept_id?: string | null
+  connector_resource_ids?: string[]
+}
+
+export type GlossaryValidationRunSummary = {
+  id: string
+  workspace_id: string
+  requested_by_user_id?: string | null
+  mode: string
+  status: string
+  target_concept_id?: string | null
+  source_scope: string
+  selected_resource_ids: string[]
+  source_sync_summary: Record<string, unknown>
+  validation_summary: Record<string, unknown>
+  linked_job_ids: string[]
+  error_message?: string | null
+  requested_at: string
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at: string
+}
+
+export type GlossaryValidationRunListResponse = {
+  items: GlossaryValidationRunSummary[]
 }
 
 export type GlossaryDraftRequest = {
@@ -403,6 +438,8 @@ export type WorkspaceOverviewResponse = {
   featured_docs: DocumentListItem[]
   featured_concepts: GlossaryConceptSummary[]
   recent_sync_issues: JobSummary[]
+  latest_validation_run?: GlossaryValidationRunSummary | null
+  review_required_count: number
 }
 
 export type WorkspaceMemberSummary = {
@@ -458,6 +495,8 @@ export type ConnectorResourceSummary = {
   name: string
   resource_url?: string | null
   parent_external_id?: string | null
+  visibility_scope: string
+  selection_mode: string
   sync_children: boolean
   sync_mode: string
   sync_interval_minutes?: number | null
@@ -546,6 +585,8 @@ export type ConnectorResourceCreateRequest = {
   name: string
   resource_url?: string | null
   parent_external_id?: string | null
+  visibility_scope?: string | null
+  selection_mode?: string | null
   sync_children?: boolean | null
   sync_mode?: string | null
   sync_interval_minutes?: number | null
@@ -553,6 +594,8 @@ export type ConnectorResourceCreateRequest = {
 }
 
 export type ConnectorResourceUpdateRequest = {
+  visibility_scope?: string | null
+  selection_mode?: string | null
   sync_children?: boolean | null
   sync_mode?: string | null
   sync_interval_minutes?: number | null

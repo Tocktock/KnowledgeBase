@@ -6,7 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.schemas.documents import DocumentListItem
-from app.schemas.glossary import GlossaryConceptSummary
+from app.schemas.glossary import GlossaryConceptSummary, GlossaryValidationRunSummary
 from app.schemas.jobs import JobSummary
 
 
@@ -85,3 +85,5 @@ class WorkspaceOverviewResponse(BaseModel):
     featured_docs: list[DocumentListItem] = Field(default_factory=list)
     featured_concepts: list[GlossaryConceptSummary] = Field(default_factory=list)
     recent_sync_issues: list[JobSummary] = Field(default_factory=list)
+    latest_validation_run: GlossaryValidationRunSummary | None = None
+    review_required_count: int = 0

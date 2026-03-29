@@ -7,7 +7,7 @@ from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.db.models import Document, DocumentChunk, DocumentRevision
+from app.db.models import Document, DocumentChunk, DocumentRevision, DocumentVisibilityScope
 
 
 async def list_documents(
@@ -17,6 +17,7 @@ async def list_documents(
     owner_team: str | None = None,
     doc_types: Iterable[str] | None = None,
     status: str | None = None,
+    include_evidence_only: bool = False,
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
@@ -24,6 +25,8 @@ async def list_documents(
     normalized_doc_types = tuple(dict.fromkeys(doc_type for doc_type in (doc_types or []) if doc_type))
 
     filters = []
+    if not include_evidence_only:
+        filters.append(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
     if q:
         q_like = f"%{q}%"
         filters.append(
@@ -51,6 +54,7 @@ async def list_documents(
             Document.language_code,
             Document.doc_type,
             Document.status,
+            Document.visibility_scope,
             Document.owner_team,
             Document.meta.label("metadata"),
             Document.current_revision_id,
@@ -180,7 +184,11 @@ async def find_related_documents(
             score.label("score"),
         )
         .join(current_revision, current_revision.id == Document.current_revision_id)
-        .where(Document.id != exclude_id, Document.status == "published")
+        .where(
+            Document.id != exclude_id,
+            Document.status == "published",
+            Document.visibility_scope == DocumentVisibilityScope.member_visible.value,
+        )
         .order_by(score.desc(), Document.updated_at.desc())
         .limit(limit)
     )

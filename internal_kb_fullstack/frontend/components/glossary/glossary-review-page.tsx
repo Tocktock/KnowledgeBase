@@ -12,10 +12,14 @@ import type {
   GlossaryConceptDetailResponse,
   GlossaryConceptListResponse,
   GlossaryConceptSummary,
+  GlossaryValidationRunCreateRequest,
+  GlossaryValidationRunListResponse,
+  GlossaryValidationRunSummary,
   JobSummary,
 } from '@/lib/types'
 import {
   formatConceptTypeLabel,
+  formatDate,
   formatDocTypeLabel,
   formatEvidenceKindLabel,
   formatOwnerTeamLabel,
@@ -46,6 +50,34 @@ async function refreshGlossary(scope: 'full' | 'incremental') {
   })
   if (!response.ok) throw new Error('용어집 리프레시를 시작하지 못했습니다.')
   return (await response.json()) as JobSummary
+}
+
+async function fetchValidationRuns() {
+  const response = await fetch('/api/glossary/validation-runs?limit=6')
+  if (!response.ok) throw new Error('검증 실행 이력을 불러오지 못했습니다.')
+  return (await response.json()) as GlossaryValidationRunListResponse
+}
+
+async function createValidationRun(payload: GlossaryValidationRunCreateRequest) {
+  const response = await fetch('/api/glossary/validation-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) {
+    const body = (await response.json()) as { detail?: string }
+    throw new Error(body.detail || '검증 실행을 시작하지 못했습니다.')
+  }
+  return (await response.json()) as GlossaryValidationRunSummary
+}
+
+function formatValidationStateLabel(value: string) {
+  if (value === 'ok') return '검증 완료'
+  if (value === 'needs_update') return '업데이트 필요'
+  if (value === 'missing_draft') return '초안 필요'
+  if (value === 'stale_evidence') return '근거 재검토'
+  if (value === 'new_term') return '신규 용어'
+  return value
 }
 
 async function generateDraft(id: string, domain: string) {
@@ -79,7 +111,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
   const [selectedId, setSelectedId] = useState<string | null>(initialList.items[0]?.id ?? null)
   const [detail, setDetail] = useState<GlossaryConceptDetailResponse | null>(null)
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState('suggested')
+  const [statusFilter, setStatusFilter] = useState('')
   const [conceptType, setConceptType] = useState('')
   const [ownerTeam, setOwnerTeam] = useState('')
   const [draftDomain, setDraftDomain] = useState('')
@@ -90,11 +122,32 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
   const [acting, setActing] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [validationRuns, setValidationRuns] = useState<GlossaryValidationRunSummary[]>([])
 
   const selectedConcept = useMemo(
     () => concepts.find((item) => item.id === selectedId) ?? detail?.concept ?? null,
     [concepts, detail, selectedId],
   )
+  const validationCounts = useMemo(() => {
+    return concepts.reduce<Record<string, number>>((acc, concept) => {
+      acc[concept.validation_state] = (acc[concept.validation_state] ?? 0) + 1
+      return acc
+    }, {})
+  }, [concepts])
+  const reviewRequiredCount = useMemo(
+    () => concepts.filter((concept) => concept.review_required).length,
+    [concepts],
+  )
+  const latestRun = validationRuns[0] ?? null
+
+  const loadValidationRuns = async () => {
+    try {
+      const data = await fetchValidationRuns()
+      setValidationRuns(data.items)
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : '검증 실행 이력을 불러오지 못했습니다.')
+    }
+  }
 
   const loadList = async () => {
     setLoadingList(true)
@@ -141,6 +194,10 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
     }
   }, [selectedId])
 
+  useEffect(() => {
+    void loadValidationRuns()
+  }, [])
+
   const runAction = async (action: () => Promise<GlossaryConceptDetailResponse | JobSummary>, successMessage: string) => {
     setActing(true)
     setError(null)
@@ -162,6 +219,21 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
     }
   }
 
+  const runValidation = async (payload: GlossaryValidationRunCreateRequest, successMessage: string) => {
+    setActing(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await createValidationRun(payload)
+      setMessage(successMessage)
+      await Promise.all([loadList(), loadValidationRuns()])
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : '검증 실행을 시작하지 못했습니다.')
+    } finally {
+      setActing(false)
+    }
+  }
+
   const approvePayload = detail?.concept.generated_document
     ? { action: 'approve', canonical_document_id: detail.concept.generated_document.id }
     : { action: 'approve' }
@@ -173,16 +245,54 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
           <div>
             <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">지식 검수</h1>
             <p className="mt-2 text-sm leading-7 text-neutral-500">
-              핵심 개념 후보를 검토하고, 근거 문서를 확인하고, 대표 문서와 승인 상태를 운영합니다.
+              연결된 워크스페이스 소스를 동기화한 뒤, 용어 정의가 여전히 맞는지 검증하고 작업 초안을 유지합니다.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => void runAction(() => refreshGlossary('incremental'), '변경분 새로고침 작업을 등록했습니다.')} disabled={acting}>
-              <RefreshCcw className="size-4" /> 변경분 새로고침
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void runValidation({ mode: 'sync_validate_impacted' }, '동기화 후 변경분 검증 작업을 등록했습니다.')}
+              disabled={acting}
+            >
+              <RefreshCcw className="size-4" /> 동기화 후 변경분 검증
             </Button>
-            <Button type="button" onClick={() => void runAction(() => refreshGlossary('full'), '전체 새로고침 작업을 등록했습니다.')} disabled={acting}>
-              <Sparkles className="size-4" /> 전체 새로고침
+            <Button
+              type="button"
+              onClick={() => void runValidation({ mode: 'sync_validate_full' }, '동기화 후 전체 검증 작업을 등록했습니다.')}
+              disabled={acting}
+            >
+              <Sparkles className="size-4" /> 동기화 후 전체 검증
             </Button>
+            <Button type="button" variant="outline" onClick={() => void runAction(() => refreshGlossary('full'), '현재 근거 기준으로 검증만 실행했습니다.')} disabled={acting}>
+              검증만 실행
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
+            <div className="text-xs text-neutral-500">지금 검토 필요</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{reviewRequiredCount}</div>
+          </div>
+          <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
+            <div className="text-xs text-neutral-500">근거 재검토</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{validationCounts.stale_evidence ?? 0}</div>
+          </div>
+          <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
+            <div className="text-xs text-neutral-500">초안 필요</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{validationCounts.missing_draft ?? 0}</div>
+          </div>
+          <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
+            <div className="text-xs text-neutral-500">신규 용어</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{validationCounts.new_term ?? 0}</div>
+          </div>
+          <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
+            <div className="text-xs text-neutral-500">최근 실행</div>
+            <div className="mt-2 text-sm font-medium text-neutral-950 dark:text-neutral-50">
+              {latestRun ? formatStatusLabel(latestRun.status) : '아직 없음'}
+            </div>
+            {latestRun ? <div className="mt-1 text-xs text-neutral-500">{formatDate(latestRun.requested_at)}</div> : null}
           </div>
         </div>
 
@@ -218,6 +328,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
               >
                 <div className="mb-2 flex flex-wrap gap-2">
                   <Badge>{formatStatusLabel(concept.status)}</Badge>
+                  <Badge>{formatValidationStateLabel(concept.validation_state)}</Badge>
                   <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                   <Badge>근거 문서 {concept.support_doc_count}개</Badge>
                 </div>
@@ -225,6 +336,9 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                 <div className="mt-1 text-xs text-neutral-500">신뢰도 {concept.confidence_score.toFixed(2)}</div>
                 {concept.aliases.length ? (
                   <div className="mt-2 text-xs leading-6 text-neutral-500">{concept.aliases.slice(0, 4).join(', ')}</div>
+                ) : null}
+                {concept.review_required ? (
+                  <div className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">검토가 필요한 용어입니다.</div>
                 ) : null}
               </button>
             ))}
@@ -242,6 +356,7 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                   <div>
                     <div className="mb-2 flex flex-wrap gap-2">
                       <Badge>{formatStatusLabel(detail.concept.status)}</Badge>
+                      <Badge>{formatValidationStateLabel(detail.concept.validation_state)}</Badge>
                       <Badge>{formatConceptTypeLabel(detail.concept.concept_type)}</Badge>
                       <Badge>근거 문서 {detail.concept.support_doc_count}개</Badge>
                       <Badge>근거 구간 {detail.concept.support_chunk_count}개</Badge>
@@ -259,6 +374,14 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                   별칭: {detail.concept.aliases.length ? detail.concept.aliases.join(', ') : '없음'}
                 </div>
 
+                <div className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm leading-7 text-neutral-600 dark:border-neutral-800 dark:text-neutral-400">
+                  <div className="font-medium text-neutral-900 dark:text-neutral-50">검증 상태</div>
+                  <div className="mt-2">{detail.concept.validation_reason || '현재 검증 메모가 없습니다.'}</div>
+                  <div className="mt-2 text-xs text-neutral-500">
+                    마지막 검증 {detail.concept.last_validated_at ? formatDate(detail.concept.last_validated_at) : '기록 없음'} · 근거 출처 {detail.concept.source_system_mix.join(', ') || '없음'}
+                  </div>
+                </div>
+
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <Button type="button" onClick={() => detail && void runAction(() => generateDraft(detail.concept.id, draftDomain), '용어집 초안을 생성했습니다.')} disabled={acting || !detail}>
                     {acting ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
@@ -272,6 +395,14 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                   </Button>
                   <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'mark_stale' }), '개념을 최신성 낮음 상태로 표시했습니다.')} disabled={acting || !detail}>
                     최신성 낮음 표시
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => detail && void runValidation({ mode: 'validate_term', target_concept_id: detail.concept.id }, '이 용어를 다시 검증하도록 등록했습니다.')}
+                    disabled={acting || !detail}
+                  >
+                    이 용어 다시 검증
                   </Button>
                 </div>
 
@@ -288,6 +419,16 @@ export function GlossaryReviewPage({ initialList }: { initialList: GlossaryConce
                       </Link>
                     ) : (
                       <div className="text-sm text-neutral-500">아직 초안이 없습니다.</div>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium text-neutral-700 dark:text-neutral-300">현재 승인 문서</div>
+                    {detail.concept.canonical_document ? (
+                      <Link href={`/docs/${detail.concept.canonical_document.slug}`} className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400">
+                        {detail.concept.canonical_document.title}
+                      </Link>
+                    ) : (
+                      <div className="text-sm text-neutral-500">아직 승인된 대표 문서가 없습니다.</div>
                     )}
                   </div>
                 </div>

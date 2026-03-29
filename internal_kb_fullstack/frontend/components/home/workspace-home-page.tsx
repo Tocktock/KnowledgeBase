@@ -84,7 +84,7 @@ export function WorkspaceHomePage() {
               흩어진 팀 문서를 신뢰 가능한 워크스페이스 지식으로 바꿉니다.
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-neutral-600 dark:text-neutral-400">
-              관리자는 Google Drive와 Notion을 한 번 연결하고, 구성원은 검색과 문서 탐색만으로 최신 지식을 바로 찾습니다.
+              관리자는 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 검색과 문서 탐색만으로 최신 지식을 바로 찾습니다.
               연결 구조나 동기화 내부를 이해할 필요는 없습니다.
             </p>
             <div className="mt-5 flex flex-wrap gap-3">
@@ -182,6 +182,31 @@ export function WorkspaceHomePage() {
               ))}
             </div>
           ) : null}
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-neutral-200 px-4 py-4 dark:border-neutral-800">
+              <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">지식 검수 현황</div>
+              <div className="mt-2 text-sm text-neutral-500">
+                지금 검토가 필요한 용어 {overview.review_required_count}개
+              </div>
+              <div className="mt-2 text-xs text-neutral-400">
+                최근 실행{' '}
+                {overview.latest_validation_run
+                  ? `${formatDate(overview.latest_validation_run.requested_at)} · ${String(
+                      overview.latest_validation_run.validation_summary.updated_concepts ?? 0,
+                    )}개 반영`
+                  : '아직 없음'}
+              </div>
+            </div>
+            <Link
+              href="/glossary/review"
+              className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-4 text-sm font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300 dark:hover:bg-blue-950/40"
+            >
+              지식 검수 열기 <ArrowRight className="ml-1 inline size-4" />
+              <div className="mt-2 text-xs font-normal text-blue-700/80 dark:text-blue-300/80">
+                동기화 후 변경분 검증과 용어 정의 검토를 한 곳에서 처리합니다.
+              </div>
+            </Link>
+          </div>
         </Card>
       ) : null}
 

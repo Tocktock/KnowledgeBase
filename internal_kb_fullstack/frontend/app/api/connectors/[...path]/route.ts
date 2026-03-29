@@ -4,13 +4,16 @@ import { getSessionToken, proxyJson, toNextJson } from '@/lib/api/proxy'
 
 async function forward(request: NextRequest, path: string[]) {
   const search = request.nextUrl.search
-  const bodyText =
+  const contentType = request.headers.get('content-type') ?? ''
+  const body =
     request.method === 'POST' || request.method === 'PATCH'
-      ? await request.text()
-      : ''
+      ? contentType.includes('multipart/form-data')
+        ? await request.formData()
+        : await request.text()
+      : undefined
   const response = await proxyJson(`/v1/connectors/${path.join('/')}${search}`, {
     method: request.method,
-    body: bodyText || undefined,
+    body: body instanceof FormData ? body : body || undefined,
     sessionToken: getSessionToken(request),
   })
   return toNextJson(response)

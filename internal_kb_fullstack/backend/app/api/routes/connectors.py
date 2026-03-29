@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_authenticated_user, get_optional_authenticated_user
@@ -35,6 +35,7 @@ from app.services.connectors import (
     get_connectors_readiness,
     list_connections,
     list_source_items,
+    import_notion_export_resource,
     request_resource_sync,
     start_provider_oauth,
     update_connection,
@@ -189,6 +190,33 @@ async def create_resource_route(
 ) -> ConnectorResourceSummary:
     try:
         return await create_resource(session, auth_user, connection_id, payload)
+    except ConnectorError as exc:
+        _raise_connector_http_error(exc)
+
+
+@router.post(
+    "/{connection_id}/resources/upload",
+    response_model=ConnectorResourceSummary,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_resource_route(
+    connection_id: UUID,
+    name: str = Form(...),
+    visibility_scope: str = Form(default="evidence_only"),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> ConnectorResourceSummary:
+    try:
+        return await import_notion_export_resource(
+            session,
+            auth_user,
+            connection_id,
+            name=name,
+            filename=file.filename or "notion-export.zip",
+            content_bytes=await file.read(),
+            visibility_scope=visibility_scope,
+        )
     except ConnectorError as exc:
         _raise_connector_http_error(exc)
 

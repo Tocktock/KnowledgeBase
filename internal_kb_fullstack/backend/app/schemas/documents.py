@@ -23,6 +23,7 @@ class IngestDocumentRequest(BaseModel):
     language_code: str = "ko"
     owner_team: str | None = None
     status: Literal["draft", "published", "archived"] = "published"
+    visibility_scope: Literal["member_visible", "evidence_only"] = "member_visible"
     metadata: dict[str, Any] = Field(default_factory=dict)
     priority: int = 100
     allow_slug_update: bool = True
@@ -70,6 +71,7 @@ class DocumentSummary(BaseModel):
     language_code: str
     doc_type: str
     status: str
+    visibility_scope: str
     owner_team: str | None = None
     metadata: dict[str, Any]
     current_revision_id: UUID | None = None

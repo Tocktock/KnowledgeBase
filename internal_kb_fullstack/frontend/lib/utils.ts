@@ -40,6 +40,7 @@ const SOURCE_SYSTEM_LABELS: Record<string, string> = {
   manual: '직접 작성',
   upload: '파일 업로드',
   repo: '저장소',
+  github: 'GitHub',
   notion: '노션',
   'notion-export': '노션 가져오기',
   glossary: '용어집',
@@ -70,6 +71,7 @@ const JOB_KIND_LABELS: Record<string, string> = {
   embedding: '임베딩',
   refresh: '용어집 새로고침',
   draft: '용어집 초안',
+  validation_run: '용어 검증 실행',
   connector_sync: '연결 동기화',
 }
 
@@ -91,6 +93,7 @@ const TRUST_FRESHNESS_LABELS: Record<string, string> = {
 
 const TRUST_SOURCE_LABELS: Record<string, string> = {
   'Google Drive': 'Google Drive',
+  GitHub: 'GitHub',
   Notion: 'Notion',
   Repo: '저장소',
   Upload: '업로드 문서',
@@ -113,14 +116,18 @@ const CONNECTOR_SCOPE_LABELS: Record<string, string> = {
 
 const CONNECTOR_PROVIDER_LABELS: Record<string, string> = {
   google_drive: 'Google Drive',
+  github: 'GitHub',
   notion: 'Notion',
 }
 
 const CONNECTOR_RESOURCE_KIND_LABELS: Record<string, string> = {
   folder: '폴더',
   shared_drive: '공유 드라이브',
+  repository_docs: '저장소 문서',
+  repository_evidence: '저장소 용어 근거',
   page: '페이지',
   database: '데이터베이스',
+  export_upload: 'Notion 내보내기 파일',
 }
 
 const CONNECTOR_SYNC_MODE_LABELS: Record<string, string> = {
@@ -134,6 +141,11 @@ const CONNECTOR_ITEM_STATUS_LABELS: Record<string, string> = {
   unsupported: '지원하지 않음',
   failed: '실패',
   deleted: '대상에서 사라짐',
+}
+
+const CONNECTOR_VISIBILITY_SCOPE_LABELS: Record<string, string> = {
+  member_visible: '구성원에게 공개',
+  evidence_only: '검증 전용',
 }
 
 function formatMappedLabel(value: string | null | undefined, labels: Record<string, string>) {
@@ -239,6 +251,10 @@ export function formatConnectorSyncModeLabel(value?: string | null) {
 
 export function formatConnectorItemStatusLabel(value?: string | null) {
   return formatMappedLabel(value, CONNECTOR_ITEM_STATUS_LABELS)
+}
+
+export function formatConnectorVisibilityScopeLabel(value?: string | null) {
+  return formatMappedLabel(value, CONNECTOR_VISIBILITY_SCOPE_LABELS)
 }
 
 export function formatOwnerTeamLabel(value?: string | null) {

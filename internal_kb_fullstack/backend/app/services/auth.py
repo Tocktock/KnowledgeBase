@@ -144,6 +144,8 @@ def _normalize_owner_scope(value: str | None) -> str:
 def _normalize_connector_provider_path(value: str | None) -> str:
     if value == "notion":
         return "notion"
+    if value == "github":
+        return "github"
     return "google-drive"
 
 

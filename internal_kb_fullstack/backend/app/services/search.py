@@ -209,6 +209,7 @@ async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> Search
               ON d.id = dc.document_id
              AND d.current_revision_id = dc.revision_id
             WHERE d.status = 'published'
+              AND d.visibility_scope = 'member_visible'
               {current_chunk_filters}
         ),
         vector_hits AS (
@@ -455,6 +456,7 @@ async def _assemble_concept_hits(
         owner_team=payload.owner_team,
         doc_type=payload.doc_type,
         source_system=payload.source_system,
+        include_evidence_only=False,
     )
     support_hits = [_support_row_to_hit(row, concept=concept) for row in support_rows]
     hits = ([canonical_hit] if canonical_hit is not None else []) + support_hits

@@ -16,6 +16,8 @@ class ConnectorResourceSummary(BaseModel):
     name: str
     resource_url: str | None = None
     parent_external_id: str | None = None
+    visibility_scope: str
+    selection_mode: str
     sync_children: bool
     sync_mode: str
     sync_interval_minutes: int | None = None
@@ -104,6 +106,8 @@ class ConnectorResourceCreateRequest(BaseModel):
     name: str
     resource_url: str | None = None
     parent_external_id: str | None = None
+    visibility_scope: str | None = None
+    selection_mode: str | None = None
     sync_children: bool | None = None
     sync_mode: str | None = None
     sync_interval_minutes: int | None = None
@@ -111,6 +115,8 @@ class ConnectorResourceCreateRequest(BaseModel):
 
 
 class ConnectorResourceUpdateRequest(BaseModel):
+    visibility_scope: str | None = None
+    selection_mode: str | None = None
     sync_children: bool | None = None
     sync_mode: str | None = None
     sync_interval_minutes: int | None = None
