@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from functools import lru_cache
 from typing import Iterable
 
@@ -72,10 +73,31 @@ class RemoteEmbeddingService:
         return [item.embedding for item in ordered]
 
     async def embed_many(self, texts: list[str]) -> list[list[float]]:
-        results: list[list[float]] = []
-        for batch in self.batch_texts(texts):
-            results.extend(await self._embed_batch(batch))
-        return results
+        batches = self.batch_texts(texts)
+        if not batches:
+            return []
+
+        concurrency = max(1, min(self.settings.embedding_batch_concurrency, len(batches)))
+        if concurrency == 1:
+            results: list[list[float]] = []
+            for batch in batches:
+                results.extend(await self._embed_batch(batch))
+            return results
+
+        semaphore = asyncio.Semaphore(concurrency)
+        batch_results: list[list[list[float]] | None] = [None] * len(batches)
+
+        async def run_batch(index: int, batch: list[str]) -> None:
+            async with semaphore:
+                batch_results[index] = await self._embed_batch(batch)
+
+        await asyncio.gather(*(run_batch(index, batch) for index, batch in enumerate(batches)))
+
+        ordered_results: list[list[float]] = []
+        for result in batch_results:
+            assert result is not None
+            ordered_results.extend(result)
+        return ordered_results
 
     async def embed_one(self, text: str) -> list[float]:
         return (await self.embed_many([text]))[0]
