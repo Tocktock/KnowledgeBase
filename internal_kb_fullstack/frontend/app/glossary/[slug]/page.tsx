@@ -7,8 +7,6 @@ import { Card } from '@/components/ui/card'
 import { getGlossaryConceptBySlug } from '@/lib/api/server'
 import { formatConceptTypeLabel, formatDocTypeLabel, formatEvidenceKindLabel, formatOwnerTeamLabel, formatStatusLabel } from '@/lib/utils'
 
-export const dynamic = 'force-dynamic'
-
 export default async function GlossaryDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const detail = await getGlossaryConceptBySlug(slug).catch(() => null)
@@ -23,7 +21,7 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
           <Badge>{formatConceptTypeLabel(detail.concept.concept_type)}</Badge>
           {detail.concept.owner_team_hint ? <Badge>{formatOwnerTeamLabel(detail.concept.owner_team_hint)}</Badge> : null}
         </div>
-        <h1 className="text-4xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{detail.concept.display_term}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 md:text-4xl dark:text-neutral-50">{detail.concept.display_term}</h1>
         <div className="mt-4 flex flex-wrap gap-4 text-sm text-neutral-500 dark:text-neutral-400">
           <div>정규화 용어 {detail.concept.normalized_term}</div>
           <div>근거 문서 {detail.concept.support_doc_count}개</div>

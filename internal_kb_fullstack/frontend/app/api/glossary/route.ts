@@ -1,16 +1,18 @@
-import { proxyJson, toNextJson } from '@/lib/api/proxy'
+import { NextRequest } from 'next/server'
 
-export async function GET(request: Request) {
-  const { search } = new URL(request.url)
+import { getSessionToken, proxyJson, toNextJson } from '@/lib/api/proxy'
+
+export async function GET(request: NextRequest) {
+  const { search } = request.nextUrl
   const response = await proxyJson(`/v1/glossary${search}`)
   return toNextJson(response)
 }
 
-export async function POST(request: Request) {
-  const payload = await request.json()
+export async function POST(request: NextRequest) {
   const response = await proxyJson('/v1/glossary/refresh', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: await request.text(),
+    sessionToken: getSessionToken(request),
   })
   return toNextJson(response)
 }

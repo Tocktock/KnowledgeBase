@@ -14,6 +14,8 @@ Connectors import workspace knowledge into a single searchable layer. Workspace 
 
 - Frontend page:
   - `/connectors`
+  - `/connectors/setup/[provider]`
+  - `/connectors/[connectionId]`
 - Backend public routes:
   - all connector APIs under `/v1/connectors/*`
 
@@ -31,6 +33,7 @@ Connectors import workspace knowledge into a single searchable layer. Workspace 
 - Default UI hides raw `resource_kind`, `external_id`, and low-level metadata.
 - Advanced selection remains admin-only.
 - Login continuation always routes anonymous connector actions through `/login` and resumes the provider flow afterward.
+- `/connectors` is the overview page. Provider-specific browse, upload, and resource-creation work happens on dedicated setup or connection-detail routes.
 
 ## Provider and template model
 
@@ -72,11 +75,12 @@ Template intent:
   - any protected action routes to `/login`
   - successful login resumes the requested provider flow
 - Admin live-source setup:
-  - choose a provider template
+  - start from `/connectors`
+  - move into `/connectors/setup/[provider]`
   - complete provider OAuth if needed
   - browse or upload the target source
   - confirm sync and visibility defaults
-  - finish and return to workspace source status
+  - continue resource management on `/connectors/[connectionId]`
 - Member view:
   - workspace sources are visible as read-only shared assets
   - personal source management stays separate and secondary

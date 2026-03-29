@@ -12,6 +12,19 @@ Canonical schema modules:
 - Purpose: member-facing Concepts list page.
 - Caller: anonymous or authenticated user.
 - Response: HTML page rendered by the frontend app.
+- Important behavior:
+  - the page emphasizes approved concepts and links to the dedicated request page for missing terms
+
+### `GET /glossary/requests`
+
+- Purpose: dedicated member-facing intake page for requesting a new concept and checking the current user's request history.
+- Caller: anonymous or authenticated user.
+- Response: HTML page rendered by the frontend app.
+- Important behavior:
+  - signed-in workspace members see the request form and a `My requests` section
+  - anonymous users see a login CTA instead of the form and request history
+  - request submission delegates to `POST /v1/glossary/requests`
+  - request history reads from `GET /v1/glossary/requests`
 
 ### `GET /glossary/[slug]`
 

@@ -238,6 +238,40 @@ export type GlossaryRefreshRequest = {
   scope?: 'full' | 'incremental'
 }
 
+export type GlossaryConceptRequestCreateRequest = {
+  term: string
+  aliases?: string[]
+  request_note?: string | null
+  owner_team_hint?: string | null
+}
+
+export type GlossaryConceptRequestResponse = {
+  request_status: 'created' | 'updated_existing' | 'already_exists'
+  message: string
+  concept: GlossaryConceptSummary
+}
+
+export type GlossaryConceptRequestListEntry = {
+  requested_by_name?: string | null
+  requested_by_email?: string | null
+  request_note?: string | null
+  requested_at?: string | null
+  owner_team_hint?: string | null
+}
+
+export type GlossaryConceptRequestListItem = {
+  concept: GlossaryConceptSummary
+  latest_request: GlossaryConceptRequestListEntry
+  request_count: number
+}
+
+export type GlossaryConceptRequestListResponse = {
+  items: GlossaryConceptRequestListItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export type GlossaryValidationRunCreateRequest = {
   mode?: 'sync_validate_impacted' | 'sync_validate_full' | 'validate_term'
   target_concept_id?: string | null

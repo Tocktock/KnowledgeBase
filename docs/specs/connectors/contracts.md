@@ -9,11 +9,30 @@ Canonical schema modules:
 
 ### `GET /connectors`
 
-- Purpose: role-aware source setup and source status surface.
+- Purpose: role-aware source overview and source status surface.
 - Caller:
   - anonymous: marketing and login continuation view
   - member: read-only workspace status plus optional personal section
-  - owner/admin: full management UI
+  - owner/admin: overview plus entry points into setup/detail pages
+- Response: HTML page rendered by the frontend app.
+
+### `GET /connectors/setup/[provider]`
+
+- Purpose: dedicated provider setup page for OAuth continuation, browse/search/upload, and resource creation.
+- Caller:
+  - anonymous: login continuation entry
+  - member: read-only or blocked for workspace scope
+  - owner/admin: full setup UI for workspace scope
+- Query params:
+  - `scope=workspace|personal`
+  - `template`
+  - optional `connectionId`
+- Response: HTML page rendered by the frontend app.
+
+### `GET /connectors/[connectionId]`
+
+- Purpose: dedicated connection detail page for one connection’s resources, status, and management actions.
+- Caller: authenticated user with scope-appropriate visibility of the connection.
 - Response: HTML page rendered by the frontend app.
 
 ## Backend readiness and connection APIs

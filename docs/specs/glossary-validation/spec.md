@@ -13,6 +13,7 @@ The glossary definition workflow is the primary authoritative output of the prod
 
 - Frontend page:
   - `/glossary/review`
+  - `/glossary/review/[conceptId]`
 - Backend public routes:
   - glossary validation, mutation, and draft APIs under `/v1/glossary/*`
 
@@ -30,6 +31,7 @@ The glossary definition workflow is the primary authoritative output of the prod
 - Approved glossary pages stay published even when evidence drifts.
 - When evidence drifts, the approved page remains visible, validation moves to `stale_evidence`, and a working draft is created or refreshed for review.
 - New terms discovered by sync enter the queue as suggested content and are not auto-approved.
+- Manual requests from signed-in workspace members also enter the queue as suggested content and are not auto-approved.
 
 ## Validation run modes
 
@@ -50,13 +52,22 @@ Workspace-wide runs operate on active connected sources in the current workspace
 - Review queue:
   - operators inspect validation counts and latest run summary
   - per-concept rows show lifecycle status, validation state, review reason, support mix, current approved output, and working draft availability
+  - user-requested concepts carry request metadata so admins can see who requested the term and why
   - operators can approve, ignore, mark stale, split, merge, or request drafts
+- Manual request approval:
+  - members request a term from `/glossary/requests`
+  - the same page shows the requester's own requests and current review/publish state
+  - the request lands as a suggested concept candidate
+  - admins create a working draft from synced evidence or, when evidence is still missing, from the stored request context
+  - admins review and approve the resulting glossary document through the existing QA workflow
 - Term-specific validation:
   - admins can revalidate a single concept without a workspace-wide sync run
 
 ## Knowledge QA workflow
 
 - `/glossary/review` is the primary admin surface.
+- `/glossary/review` is the dashboard and queue page.
+- `/glossary/review/[conceptId]` is the dedicated concept workspace for approvals, draft generation, merge/split, and evidence inspection.
 - Primary admin actions are:
   - `동기화 후 변경분 검증`
   - `동기화 후 전체 검증`

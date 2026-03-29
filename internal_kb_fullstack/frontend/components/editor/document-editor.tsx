@@ -17,12 +17,13 @@ import {
   Quote,
   Sparkles,
 } from 'lucide-react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
-import Link from '@tiptap/extension-link'
+import TiptapLink from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
@@ -44,6 +45,7 @@ import type {
 import { formatStatusLabel, slugify } from '@/lib/utils'
 
 type EditorMode = 'visual' | 'source' | 'preview'
+type DocumentAuthoringFlow = 'manual' | 'upload' | 'definition'
 
 class SlugConflictError extends Error {
   detail: SlugConflictDetail
@@ -102,16 +104,20 @@ async function generateDefinitionDraft(payload: GenerateDefinitionDraftRequest) 
 
 function ToolbarButton({
   active,
+  label,
   onClick,
   children,
 }: {
   active?: boolean
+  label: string
   onClick: () => void
   children: ReactNode
 }) {
   return (
     <button
       type="button"
+      aria-label={label}
+      title={label}
       onClick={onClick}
       className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border transition ${
         active
@@ -125,6 +131,73 @@ function ToolbarButton({
 }
 
 export function DocumentEditor() {
+  return <DocumentEditorWorkspace flow="manual" />
+}
+
+export function DocumentModeChooserPage() {
+  const flows: Array<{
+    href: string
+    title: string
+    description: string
+    badge: string
+  }> = [
+    {
+      href: '/new/manual',
+      title: '직접 작성',
+      description: '처음부터 문서를 쓰고 위키 링크와 메타데이터를 함께 정리합니다.',
+      badge: 'Manual',
+    },
+    {
+      href: '/new/upload',
+      title: '파일에서 시작',
+      description: 'Markdown, Text, HTML 파일을 업로드해 문서를 빠르게 저장합니다.',
+      badge: 'Upload',
+    },
+    {
+      href: '/new/definition',
+      title: '정의 초안 생성',
+      description: '기존 근거 문서를 바탕으로 핵심 개념 정의 초안을 만든 뒤 편집합니다.',
+      badge: 'Definition',
+    },
+  ]
+
+  return (
+    <div className="space-y-6">
+      <Card className="p-6">
+        <div className="mb-2 flex items-center gap-2">
+          <Badge>Document Authoring</Badge>
+          <Badge className="border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">Mode chooser</Badge>
+        </div>
+        <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">새 문서 추가</h1>
+        <p className="mt-2 text-sm leading-7 text-neutral-500">
+          이 페이지에서는 작성 방식만 고릅니다. 실제 편집과 업로드, 정의 초안 작업은 각각의 전용 화면에서 진행합니다.
+        </p>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {flows.map((flow) => (
+          <Link
+            key={flow.href}
+            href={flow.href}
+            className="rounded-3xl border border-neutral-200 bg-white/80 p-6 transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-neutral-800 dark:bg-neutral-950/70 dark:hover:border-blue-900 dark:hover:bg-blue-950/20"
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <Badge>{flow.badge}</Badge>
+            </div>
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">{flow.title}</div>
+            <div className="mt-2 text-sm leading-7 text-neutral-500">{flow.description}</div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function DocumentEditorWorkspace({
+  flow,
+}: {
+  flow: DocumentAuthoringFlow
+}) {
   const router = useRouter()
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<EditorMode>('visual')
@@ -145,6 +218,28 @@ export function DocumentEditor() {
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
+  const flowMeta = useMemo(() => {
+    if (flow === 'upload') {
+      return {
+        badge: 'Upload-first',
+        title: '파일로 문서 만들기',
+        description: '파일 업로드와 업로드 메타데이터만 노출합니다. 직접 작성 편집은 같은 화면 왼쪽 폼에서 이어집니다.',
+      }
+    }
+    if (flow === 'definition') {
+      return {
+        badge: 'Definition draft',
+        title: '정의 초안 만들기',
+        description: '근거 문서를 검색해 초안을 채운 뒤 저장 전 마지막 편집을 합니다.',
+      }
+    }
+    return {
+      badge: 'Manual authoring',
+      title: '새 문서 작성',
+      description: '처음부터 문서를 쓰고, 위키처럼 연결되는 수동 문서를 만듭니다.',
+    }
+  }, [flow])
+
   useEffect(() => {
     if (!slug && title) setSlug(slugify(title))
   }, [slug, title])
@@ -158,8 +253,10 @@ export function DocumentEditor() {
     content: markdown,
     contentType: 'markdown',
     extensions: [
-      StarterKit,
-      Link.configure({
+      StarterKit.configure({
+        link: false,
+      }),
+      TiptapLink.configure({
         openOnClick: false,
         HTMLAttributes: {
           rel: 'noreferrer',
@@ -320,19 +417,25 @@ export function DocumentEditor() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_340px]">
         <form onSubmit={handleSubmit} className="space-y-6">
           <Card className="p-6">
-            <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-              <div>
+            <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0">
                 <div className="mb-2 flex items-center gap-2">
                   <Badge>Visual + Wiki Source</Badge>
-                  <Badge className="border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">위키 문서 편집</Badge>
+                  <Badge className="border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">{flowMeta.badge}</Badge>
                 </div>
-                <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">새 문서 작성</h1>
-                <p className="mt-2 text-sm leading-6 text-neutral-500">노션처럼 깔끔하게 쓰고, 위키처럼 서로 연결되는 문서를 만듭니다.</p>
+                <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{flowMeta.title}</h1>
+                <p className="mt-2 text-sm leading-6 text-neutral-500">{flowMeta.description}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                  <Link href="/new" className="text-blue-600 hover:text-blue-500 dark:text-blue-400">작성 방식 다시 고르기</Link>
+                  {flow !== 'manual' ? <Link href="/new/manual" className="text-blue-600 hover:text-blue-500 dark:text-blue-400">직접 작성</Link> : null}
+                  {flow !== 'upload' ? <Link href="/new/upload" className="text-blue-600 hover:text-blue-500 dark:text-blue-400">파일 업로드</Link> : null}
+                  {flow !== 'definition' ? <Link href="/new/definition" className="text-blue-600 hover:text-blue-500 dark:text-blue-400">정의 초안</Link> : null}
+                </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button type="button" variant={mode === 'visual' ? 'secondary' : 'outline'} onClick={() => { syncEditorFromMarkdown(); setMode('visual') }}>
                   <Sparkles className="size-4" /> 시각 편집
                 </Button>
@@ -347,24 +450,24 @@ export function DocumentEditor() {
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="md:col-span-2">
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 제목</label>
-                <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: 배포 체크리스트" />
+                <label htmlFor="document-title" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 제목</label>
+                <Input id="document-title" name="document_title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: 배포 체크리스트" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 주소</label>
-                <Input value={slug} onChange={(event) => setSlug(slugify(event.target.value))} placeholder="예: deployment-checklist" />
+                <label htmlFor="document-slug" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 주소</label>
+                <Input id="document-slug" name="document_slug" value={slug} onChange={(event) => setSlug(slugify(event.target.value))} placeholder="예: deployment-checklist" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소스 URL</label>
-                <Input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="선택 입력" />
+                <label htmlFor="document-source-url" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소스 URL</label>
+                <Input id="document-source-url" name="document_source_url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="선택 입력" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 그룹</label>
-                <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="예: platform, product" />
+                <label htmlFor="document-owner-team" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 그룹</label>
+                <Input id="document-owner-team" name="document_owner_team" value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="예: platform, product" />
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 타입</label>
-                <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="예: runbook" />
+                <label htmlFor="document-doc-type" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 타입</label>
+                <Input id="document-doc-type" name="document_doc_type" value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="예: runbook" />
               </div>
             </div>
 
@@ -385,31 +488,31 @@ export function DocumentEditor() {
 
           <Card className="overflow-hidden">
             <div className="flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-neutral-50/80 px-4 py-3 dark:border-neutral-800 dark:bg-neutral-900/70">
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleBold().run()} active={editor?.isActive('bold')}>
+              <ToolbarButton label="굵게" onClick={() => editor?.chain().focus().toggleBold().run()} active={editor?.isActive('bold')}>
                 <Bold className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} active={editor?.isActive('heading', { level: 2 })}>
+              <ToolbarButton label="제목 2" onClick={() => editor?.chain().focus().toggleHeading({ level: 2 }).run()} active={editor?.isActive('heading', { level: 2 })}>
                 <Heading2 className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleBulletList().run()} active={editor?.isActive('bulletList')}>
+              <ToolbarButton label="글머리 목록" onClick={() => editor?.chain().focus().toggleBulletList().run()} active={editor?.isActive('bulletList')}>
                 <List className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleOrderedList().run()} active={editor?.isActive('orderedList')}>
+              <ToolbarButton label="번호 목록" onClick={() => editor?.chain().focus().toggleOrderedList().run()} active={editor?.isActive('orderedList')}>
                 <ListOrdered className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleTaskList().run()} active={editor?.isActive('taskList')}>
+              <ToolbarButton label="체크리스트" onClick={() => editor?.chain().focus().toggleTaskList().run()} active={editor?.isActive('taskList')}>
                 <CheckSquare className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleBlockquote().run()} active={editor?.isActive('blockquote')}>
+              <ToolbarButton label="인용문" onClick={() => editor?.chain().focus().toggleBlockquote().run()} active={editor?.isActive('blockquote')}>
                 <Quote className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().toggleCodeBlock().run()} active={editor?.isActive('codeBlock')}>
+              <ToolbarButton label="코드 블록" onClick={() => editor?.chain().focus().toggleCodeBlock().run()} active={editor?.isActive('codeBlock')}>
                 <Code2 className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={() => editor?.chain().focus().setHorizontalRule().run()}>
+              <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>
                 <Pilcrow className="size-4" />
               </ToolbarButton>
-              <ToolbarButton onClick={insertInternalLink}>
+              <ToolbarButton label="내부 문서 링크" onClick={insertInternalLink}>
                 <Link2 className="size-4" />
               </ToolbarButton>
             </div>
@@ -420,6 +523,8 @@ export function DocumentEditor() {
               ) : null}
               {mode === 'source' ? (
                 <Textarea
+                  id="document-markdown"
+                  name="document_markdown"
                   value={markdown}
                   onChange={(event) => setMarkdown(event.target.value)}
                   className="min-h-[580px] rounded-none border-0 px-6 py-5 font-mono text-[13px] leading-7 shadow-none focus:border-0"
@@ -459,7 +564,7 @@ export function DocumentEditor() {
             </div>
           ) : null}
 
-          <div className="flex justify-end gap-3">
+          <div className="flex flex-wrap justify-end gap-3">
             <Button type="button" variant="outline" onClick={() => router.push('/docs')}>
               취소
             </Button>
@@ -472,63 +577,6 @@ export function DocumentEditor() {
 
         <div className="space-y-6">
           <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-              <Sparkles className="size-4 text-blue-500" /> 정의 초안 생성
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">정의할 주제</label>
-                <Input value={definitionTopic} onChange={(event) => setDefinitionTopic(event.target.value)} placeholder="예: 센디 차량" />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">도메인 / 맥락</label>
-                <Input value={definitionDomain} onChange={(event) => setDefinitionDomain(event.target.value)} placeholder="예: 배송 운영" />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 출처</label>
-                <Input
-                  value={generationSourceSystem}
-                  onChange={(event) => setGenerationSourceSystem(event.target.value)}
-                  placeholder="선택 입력 예: notion-export, manual"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 소유 그룹</label>
-                <Input
-                  value={generationOwnerTeam}
-                  onChange={(event) => setGenerationOwnerTeam(event.target.value)}
-                  placeholder="선택 입력 예: product, logistics"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 타입</label>
-                <Input value={generationDocType} onChange={(event) => setGenerationDocType(event.target.value)} placeholder="선택 입력 예: glossary (용어집)" />
-              </div>
-              <div className="rounded-2xl bg-neutral-50 px-4 py-3 text-xs leading-6 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
-                생성 필터는 선택 사항이며 저장 메타데이터와 분리되어 있습니다. 비워두면 전체 문서를 대상으로 검색하고, 생성된 내용은 자동 저장되지 않고 편집기 안에 초안으로만 채워집니다.
-              </div>
-              <Button type="button" className="w-full" onClick={handleGenerateDefinition} disabled={!definitionTopic.trim() || generateMutation.isPending}>
-                {generateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                정의 초안 만들기
-              </Button>
-              {generatedReferences.length ? (
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">참고한 문서</div>
-                  {generatedReferences.map((reference) => (
-                    <div key={`${reference.document_slug}-${reference.index}`} className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm dark:border-neutral-800">
-                      <a href={`/docs/${reference.document_slug}`} className="font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
-                        [{reference.index}] {reference.document_title}
-                      </a>
-                      {reference.section_title ? <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{reference.section_title}</div> : null}
-                      <div className="mt-2 text-xs leading-6 text-neutral-500 dark:text-neutral-400">{reference.excerpt}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </Card>
-
-          <Card className="p-5">
             <div className="mb-3 text-sm font-semibold text-neutral-900 dark:text-neutral-50">작성 팁</div>
             <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
               {tips.map((tip) => (
@@ -537,43 +585,109 @@ export function DocumentEditor() {
             </div>
           </Card>
 
-          <Card className="p-5">
-            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-              <FileUp className="size-4 text-blue-500" /> 파일 업로드로 생성
-            </div>
-            <form onSubmit={handleFileUpload} className="space-y-4">
-              <input type="hidden" name="source_system" value="upload" />
-              <input type="hidden" name="language_code" value="ko" />
-              <input type="hidden" name="doc_type" value="knowledge" />
-              <input type="hidden" name="status" value="published" />
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">제목</label>
-                <Input name="title" placeholder="업로드 문서 제목" />
+          {flow === 'definition' ? (
+            <Card className="p-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+                <Sparkles className="size-4 text-blue-500" /> 정의 초안 생성
               </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 주소</label>
-                <Input name="slug" placeholder="선택 입력" />
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="definition-topic" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">정의할 주제</label>
+                  <Input id="definition-topic" name="definition_topic" value={definitionTopic} onChange={(event) => setDefinitionTopic(event.target.value)} placeholder="예: 센디 차량" />
+                </div>
+                <div>
+                  <label htmlFor="definition-domain" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">도메인 / 맥락</label>
+                  <Input id="definition-domain" name="definition_domain" value={definitionDomain} onChange={(event) => setDefinitionDomain(event.target.value)} placeholder="예: 배송 운영" />
+                </div>
+                <div>
+                  <label htmlFor="definition-source-system" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 출처</label>
+                  <Input
+                    id="definition-source-system"
+                    name="definition_source_system"
+                    value={generationSourceSystem}
+                    onChange={(event) => setGenerationSourceSystem(event.target.value)}
+                    placeholder="선택 입력 예: notion-export, manual"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="definition-owner-team" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 소유 그룹</label>
+                  <Input
+                    id="definition-owner-team"
+                    name="definition_owner_team"
+                    value={generationOwnerTeam}
+                    onChange={(event) => setGenerationOwnerTeam(event.target.value)}
+                    placeholder="선택 입력 예: product, logistics"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="definition-doc-type" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">생성 필터: 문서 타입</label>
+                  <Input id="definition-doc-type" name="definition_doc_type" value={generationDocType} onChange={(event) => setGenerationDocType(event.target.value)} placeholder="선택 입력 예: glossary (용어집)" />
+                </div>
+                <div className="rounded-2xl bg-neutral-50 px-4 py-3 text-xs leading-6 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
+                  생성 필터는 선택 사항이며 저장 메타데이터와 분리되어 있습니다. 비워두면 전체 문서를 대상으로 검색하고, 생성된 내용은 자동 저장되지 않고 편집기 안에 초안으로만 채워집니다.
+                </div>
+                <Button type="button" className="w-full" onClick={handleGenerateDefinition} disabled={!definitionTopic.trim() || generateMutation.isPending}>
+                  {generateMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                  정의 초안 만들기
+                </Button>
+                {generatedReferences.length ? (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">참고한 문서</div>
+                    {generatedReferences.map((reference) => (
+                      <div key={`${reference.document_slug}-${reference.index}`} className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm dark:border-neutral-800">
+                        <a href={`/docs/${reference.document_slug}`} className="inline-block break-words font-medium text-neutral-900 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
+                          [{reference.index}] {reference.document_title}
+                        </a>
+                        {reference.section_title ? <div className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">{reference.section_title}</div> : null}
+                        <div className="mt-2 text-xs leading-6 text-neutral-500 dark:text-neutral-400">{reference.excerpt}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 그룹</label>
-                <Input name="owner_team" defaultValue={ownerTeam} />
+            </Card>
+          ) : null}
+
+          {flow === 'upload' ? (
+            <Card className="p-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+                <FileUp className="size-4 text-blue-500" /> 파일 업로드로 생성
               </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">Markdown / Text / HTML 파일</label>
-                <input
-                  ref={fileInputRef}
-                  name="file"
-                  type="file"
-                  accept=".md,.markdown,.txt,.html,.htm"
-                  className="block w-full rounded-2xl border border-dashed border-neutral-300 px-4 py-8 text-sm text-neutral-500 file:hidden dark:border-neutral-700"
-                />
-              </div>
-              <Button type="submit" variant="outline" className="w-full" disabled={uploadMutation.isPending}>
-                {uploadMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <FileUp className="size-4" />}
-                파일로 문서 만들기
-              </Button>
-            </form>
-          </Card>
+              <form onSubmit={handleFileUpload} className="space-y-4">
+                <input type="hidden" name="source_system" value="upload" />
+                <input type="hidden" name="language_code" value="ko" />
+                <input type="hidden" name="doc_type" value="knowledge" />
+                <input type="hidden" name="status" value="published" />
+                <div>
+                  <label htmlFor="upload-title" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">제목</label>
+                  <Input id="upload-title" name="title" placeholder="업로드 문서 제목" />
+                </div>
+                <div>
+                  <label htmlFor="upload-slug" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">문서 주소</label>
+                  <Input id="upload-slug" name="slug" placeholder="선택 입력" />
+                </div>
+                <div>
+                  <label htmlFor="upload-owner-team" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">소유 그룹</label>
+                  <Input id="upload-owner-team" name="owner_team" defaultValue={ownerTeam} />
+                </div>
+                <div>
+                  <label htmlFor="upload-file" className="mb-2 block text-sm font-medium text-neutral-700 dark:text-neutral-300">Markdown / Text / HTML 파일</label>
+                  <input
+                    id="upload-file"
+                    ref={fileInputRef}
+                    name="file"
+                    type="file"
+                    accept=".md,.markdown,.txt,.html,.htm"
+                    className="block w-full rounded-2xl border border-dashed border-neutral-300 px-4 py-8 text-sm text-neutral-500 file:hidden dark:border-neutral-700"
+                  />
+                </div>
+                <Button type="submit" variant="outline" className="w-full" disabled={uploadMutation.isPending}>
+                  {uploadMutation.isPending ? <LoaderCircle className="size-4 animate-spin" /> : <FileUp className="size-4" />}
+                  파일로 문서 만들기
+                </Button>
+              </form>
+            </Card>
+          ) : null}
         </div>
       </div>
     </div>

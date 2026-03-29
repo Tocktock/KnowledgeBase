@@ -44,6 +44,7 @@ import type {
   ConnectorSourceItemSummary,
   JobSummary,
   PasswordResetLinkCreateResponse,
+  UserSummary,
   WorkspaceInvitationCreateResponse,
   WorkspaceInvitationSummary,
   WorkspaceMemberSummary,
@@ -241,22 +242,149 @@ function providerDefinition(provider: string) {
   return providerDefinitions.find((item) => item.key === provider) ?? providerDefinitions[0]
 }
 
+function providerDefinitionByPath(providerPath: string) {
+  return providerDefinitions.find((item) => item.path === providerPath) ?? null
+}
+
 function templateLabel(template: ProviderTemplate, scope: Scope) {
   return scope === 'workspace' ? template.organizationLabel : template.personalLabel
 }
 
-function connectHref(provider: ProviderDefinition, scope: Scope) {
-  return `/api/connectors/${provider.path}/oauth/start?scope=${scope}&return_to=${encodeURIComponent('/connectors')}`
+function buildConnectorsSetupHref(
+  providerPath: ProviderPath,
+  scope: Scope,
+  options?: { template?: string | null; connectionId?: string | null },
+) {
+  const search = new URLSearchParams({ scope })
+  if (options?.template) search.set('template', options.template)
+  if (options?.connectionId) search.set('connectionId', options.connectionId)
+  return `/connectors/setup/${providerPath}?${search.toString()}`
 }
 
-function loginConnectHref(provider: ProviderDefinition, scope: Scope) {
+function buildConnectorConnectionHref(connectionId: string) {
+  return `/connectors/${connectionId}`
+}
+
+function connectHref(provider: ProviderDefinition, scope: Scope, returnTo?: string) {
+  return `/api/connectors/${provider.path}/oauth/start?scope=${scope}&return_to=${encodeURIComponent(returnTo ?? '/connectors')}`
+}
+
+function loginConnectHref(provider: ProviderDefinition, scope: Scope, returnTo?: string) {
   const search = new URLSearchParams({
-    return_to: '/connectors',
+    return_to: returnTo ?? '/connectors',
     post_auth_action: 'connect_provider',
     owner_scope: scope,
     provider: provider.path,
   })
   return `/login?${search.toString()}`
+}
+
+function canManageConnection(connection: ConnectorConnectionSummary, authenticated: boolean, canManageWorkspaceConnectors: boolean) {
+  if (connection.owner_scope === 'workspace') return canManageWorkspaceConnectors
+  return authenticated
+}
+
+function findConnectionById(
+  connectionId: string,
+  workspaceConnections: ConnectorConnectionSummary[],
+  personalConnections: ConnectorConnectionSummary[],
+) {
+  return [...workspaceConnections, ...personalConnections].find((connection) => connection.id === connectionId) ?? null
+}
+
+function useConnectorsBaseData() {
+  const searchParams = useSearchParams()
+  const queryClient = useQueryClient()
+  const errorMessage = getErrorMessage(searchParams)
+  const loginHref = `/login?return_to=${encodeURIComponent('/connectors')}`
+  const isDevelopment = process.env.NODE_ENV !== 'production'
+
+  const authQuery = useQuery({
+    queryKey: ['auth-me'],
+    queryFn: () => fetchJson<AuthMeResponse>('/api/auth/me'),
+  })
+
+  const readinessQuery = useQuery({
+    queryKey: ['connectors-readiness'],
+    queryFn: () => fetchJson<ConnectorReadinessResponse>('/api/connectors/readiness'),
+  })
+
+  const workspaceQuery = useQuery({
+    queryKey: ['connectors', 'workspace'],
+    queryFn: () => fetchJson<ConnectorListResponse>('/api/connectors?scope=workspace'),
+    enabled: authQuery.data?.authenticated === true,
+  })
+
+  const personalQuery = useQuery({
+    queryKey: ['connectors', 'personal'],
+    queryFn: () => fetchJson<ConnectorListResponse>('/api/connectors?scope=personal'),
+    enabled: authQuery.data?.authenticated === true,
+  })
+
+  const logoutMutation = useMutation({
+    mutationFn: async () =>
+      fetchJson<{ ok: boolean }>('/api/auth/logout', {
+        method: 'POST',
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['auth-me'] })
+      await queryClient.invalidateQueries({ queryKey: ['connectors-readiness'] })
+      await queryClient.invalidateQueries({ queryKey: ['connectors'] })
+    },
+  })
+
+  const authenticated = authQuery.data?.authenticated === true
+  const user = authQuery.data?.user ?? null
+  const canManageWorkspaceConnectors = user?.can_manage_workspace_connectors === true
+  const readinessByProvider = useMemo(
+    () => new Map((readinessQuery.data?.providers ?? []).map((item) => [item.provider, item])),
+    [readinessQuery.data],
+  )
+  const workspaceConnections = workspaceQuery.data?.items ?? []
+  const personalConnections = personalQuery.data?.items ?? []
+  const workspaceReady = Array.from(readinessByProvider.values()).some((item) => item.workspace_connection_exists)
+  const healthySourceCount = Array.from(readinessByProvider.values()).reduce(
+    (sum, item) => sum + item.healthy_source_count,
+    0,
+  )
+  const needsAttentionCount = Array.from(readinessByProvider.values()).reduce(
+    (sum, item) => sum + item.needs_attention_count,
+    0,
+  )
+  const workspaceSetupState = Array.from(readinessByProvider.values()).some((item) => item.setup_state === 'attention_required')
+    ? 'attention_required'
+    : Array.from(readinessByProvider.values()).some((item) => item.setup_state === 'ready')
+      ? 'ready'
+      : Array.from(readinessByProvider.values()).some((item) => item.setup_state === 'setup_needed')
+        ? 'setup_needed'
+        : 'not_configured'
+  const workspaceResourceRecords = workspaceConnections.flatMap((connection) =>
+    connection.resources.map((resource) => ({
+      connection,
+      resource,
+    })),
+  )
+
+  return {
+    authQuery,
+    authenticated,
+    canManageWorkspaceConnectors,
+    errorMessage,
+    healthySourceCount,
+    isDevelopment,
+    loginHref,
+    logoutMutation,
+    needsAttentionCount,
+    personalConnections,
+    readinessByProvider,
+    readinessQuery,
+    user,
+    workspaceConnections,
+    workspaceQuery,
+    workspaceReady,
+    workspaceResourceRecords,
+    workspaceSetupState,
+  }
 }
 
 function providerActionLabel(provider: ProviderDefinition, scope: Scope) {
@@ -330,33 +458,36 @@ function ProviderCard({
   const oauthConfigured = readiness?.oauth_configured === true
   const connected = Boolean(connection)
   const needsReauth = connection?.status === 'needs_reauth'
-  const href = authenticated ? connectHref(provider, scope) : loginConnectHref(provider, scope)
+  const setupHref = buildConnectorsSetupHref(provider.path, scope, {
+    connectionId: connection?.id ?? null,
+    template: readiness?.recommended_templates[0] ?? null,
+  })
+  const detailHref = connection ? buildConnectorConnectionHref(connection.id) : null
+  const href = authenticated ? setupHref : loginConnectHref(provider, scope, setupHref)
   const resourceCount = connection?.resources.length ?? 0
   const workspaceReadOnly = scope === 'workspace' && authenticated && !canManage
 
   let action: ReactNode = null
   if (!oauthConfigured) {
     action = <Badge>미준비</Badge>
-  } else if (!authenticated) {
+  } else if (connected && canManage) {
     action = (
-      <Button size="sm" onClick={() => window.location.assign(href)}>
-        {providerActionLabel(provider, scope)}
-      </Button>
-    )
-  } else if (connected && needsReauth && canManage) {
-    action = (
-      <Button size="sm" onClick={() => window.location.assign(href)}>
-        다시 연결
-      </Button>
-    )
-  } else if (!connected && canManage) {
-    action = (
-      <Button size="sm" onClick={() => window.location.assign(href)}>
-        {providerActionLabel(provider, scope)}
+      <Button size="sm" onClick={() => detailHref && window.location.assign(detailHref)}>
+        {needsReauth ? '연결 상태 확인' : '관리 열기'}
       </Button>
     )
   } else if (connected) {
-    action = <Badge>{needsReauth ? '재연결 필요' : '연결됨'}</Badge>
+    action = (
+      <Button size="sm" variant="outline" onClick={() => detailHref && window.location.assign(detailHref)}>
+        상태 보기
+      </Button>
+    )
+  } else if (!authenticated || canManage) {
+    action = (
+      <Button size="sm" onClick={() => window.location.assign(href)}>
+        {providerActionLabel(provider, scope)}
+      </Button>
+    )
   } else if (workspaceReadOnly) {
     action = <Badge>관리자 권한 필요</Badge>
   } else {
@@ -1143,7 +1274,7 @@ function ConnectionManager({
                     <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
                       Notion에서 내보낸 ZIP 또는 문서 파일을 업로드하면 검증 전용 근거 코퍼스로 바로 가져옵니다.
                     </div>
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-3 lg:grid-cols-2">
                       <label className="space-y-2 text-sm">
                         <div className="font-medium text-neutral-700 dark:text-neutral-300">표시 이름</div>
                         <Input
@@ -1188,7 +1319,7 @@ function ConnectionManager({
                     <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
                       이 integration과 공유된 항목만 보입니다. 원하는 항목이 없다면 Notion에서 먼저 공유한 뒤 새로고침해 주세요.
                     </div>
-                    <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
                       <label className="space-y-2 text-sm">
                         <div className="font-medium text-neutral-700 dark:text-neutral-300">검색어</div>
                         <Input
@@ -1254,8 +1385,8 @@ function ConnectionManager({
                               key={item.id}
                               className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800"
                             >
-                              <div>
-                                <div className="text-sm font-medium text-neutral-900 dark:text-neutral-50">{item.name}</div>
+                              <div className="min-w-0 flex-1">
+                                <div className="break-words text-sm font-medium text-neutral-900 dark:text-neutral-50">{item.name}</div>
                                 <div className="mt-1 text-xs text-neutral-400">
                                   {item.resource_kind === 'database' ? '하위 페이지 전체를 동기화' : '선택한 페이지 1개만 동기화'}
                                 </div>
@@ -1298,7 +1429,7 @@ function ConnectionManager({
                         ? '연결한 계정이 접근할 수 있는 저장소만 보입니다. 저장소의 텍스트 파일을 용어 검증 근거로 가져오고, build/vendor/바이너리는 기본적으로 제외합니다.'
                         : '연결한 계정이 접근할 수 있는 저장소만 보입니다. README와 docs/doc 폴더의 문서만 동기화됩니다.'}
                     </div>
-                    <div className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
                       <label className="space-y-2 text-sm">
                         <div className="font-medium text-neutral-700 dark:text-neutral-300">저장소 검색</div>
                         <Input
@@ -1362,8 +1493,8 @@ function ConnectionManager({
                               key={item.id}
                               className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800"
                             >
-                              <div>
-                                <div className="text-sm font-medium text-neutral-900 dark:text-neutral-50">{item.name}</div>
+                              <div className="min-w-0 flex-1">
+                                <div className="break-words text-sm font-medium text-neutral-900 dark:text-neutral-50">{item.name}</div>
                                 <div className="mt-1 text-xs text-neutral-400">
                                   {resourceKind === 'repository_evidence'
                                     ? '저장소 텍스트 파일을 검증 근거로만 동기화'
@@ -1402,7 +1533,7 @@ function ConnectionManager({
                 <div className="rounded-2xl border border-neutral-200 p-4 dark:border-neutral-800">
                   <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">선택한 항목</div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <div className="font-medium text-neutral-900 dark:text-neutral-50">{resourceName}</div>
+                    <div className="min-w-0 break-words font-medium text-neutral-900 dark:text-neutral-50">{resourceName}</div>
                     <Badge>{formatConnectorResourceKindLabel(resourceKind)}</Badge>
                     {resourceUrl ? (
                       <Link href={resourceUrl} target="_blank" className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
@@ -1633,7 +1764,7 @@ function WorkspaceInvitePanel({
       <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
         <UserPlus className="size-4 text-blue-500" /> 워크스페이스 초대
       </div>
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px_auto]">
         <label className="space-y-2 text-sm">
           <div className="font-medium text-neutral-700 dark:text-neutral-300">초대할 이메일</div>
           <Input
@@ -1894,35 +2025,177 @@ function ScopeSection({
   )
 }
 
+function ConnectorsHero({
+  title,
+  authenticated,
+  user,
+  canManageWorkspaceConnectors,
+  loginHref,
+  logoutMutation,
+  errorMessage,
+  isDevelopment,
+}: {
+  title: string
+  authenticated: boolean
+  user: UserSummary | null
+  canManageWorkspaceConnectors: boolean
+  loginHref: string
+  logoutMutation: {
+    mutate: () => void
+    isPending: boolean
+  }
+  errorMessage: string | null
+  isDevelopment: boolean
+}) {
+  return (
+    <Card className="p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+            <Link2 className="size-4 text-blue-500" /> 데이터 소스 설정
+          </div>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{title}</h1>
+          <p className="mt-2 text-sm leading-7 text-neutral-500">
+            관리자는 팀의 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 별도 설정 없이 검색과 문서 탐색에서 같은 지식을 바로 사용합니다.
+          </p>
+        </div>
+        <div className="rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
+          {authenticated && user ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+                <UserRound className="size-4 text-blue-500" />
+                {user.name}
+              </div>
+              <div className="text-sm text-neutral-600 dark:text-neutral-400">{user.email}</div>
+              <div className="flex flex-wrap gap-2">
+                <Badge>{canManageWorkspaceConnectors ? '워크스페이스 관리자' : '구성원'}</Badge>
+                {user.current_workspace ? <Badge>{user.current_workspace.name}</Badge> : null}
+                {user.current_workspace_role ? <Badge>{user.current_workspace_role}</Badge> : null}
+                <Badge>최근 로그인 {formatDate(user.last_login_at)}</Badge>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => logoutMutation.mutate()} disabled={logoutMutation.isPending}>
+                로그아웃
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+                <Lock className="size-4 text-blue-500" /> 로그인 필요
+              </div>
+              <div className="text-sm text-neutral-500">
+                헤더, 사이드바, 또는 이 버튼에서 같은 로그인 페이지로 이동할 수 있습니다. 로그인 후에는 원래 보던 연결 흐름으로 바로 돌아옵니다.
+              </div>
+              <Button size="sm" onClick={() => window.location.assign(loginHref)}>
+                로그인하기
+              </Button>
+              {isDevelopment ? (
+                <div className="text-xs text-neutral-400">
+                  로컬에서는 로그인한 이메일이 <code>ADMIN_EMAILS</code>에 포함돼야 조직 연결 관리가 열립니다.
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {errorMessage ? (
+        <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300">
+          {errorMessage}
+        </div>
+      ) : null}
+
+      {!canManageWorkspaceConnectors ? (
+        <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
+          로그인한 이메일이 관리자 목록에 포함되면 조직 연결 관리가 열립니다.
+        </div>
+      ) : null}
+    </Card>
+  )
+}
+
+function ConnectorsOverviewIntro({
+  workspaceSetupState,
+  workspaceResourceRecordsCount,
+  healthySourceCount,
+  needsAttentionCount,
+}: {
+  workspaceSetupState: string
+  workspaceResourceRecordsCount: number
+  healthySourceCount: number
+  needsAttentionCount: number
+}) {
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">워크스페이스 지식 레이어 상태</div>
+          <div className="mt-1 text-sm text-neutral-500">
+            기본 흐름은 관리자 한 번 연결, 구성원 즉시 활용입니다.
+          </div>
+        </div>
+        <Badge>{formatSetupStateLabel(workspaceSetupState)}</Badge>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm dark:border-neutral-800">
+          <div className="text-neutral-500">연결된 워크스페이스 소스</div>
+          <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{workspaceResourceRecordsCount}</div>
+        </div>
+        <div className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm dark:border-neutral-800">
+          <div className="text-neutral-500">정상 상태</div>
+          <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{healthySourceCount}</div>
+        </div>
+        <div className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm dark:border-neutral-800">
+          <div className="text-neutral-500">조치 필요</div>
+          <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{needsAttentionCount}</div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function ConnectorPageFooter() {
+  return (
+    <Card className="p-5">
+      <div className="mb-3 text-sm font-semibold text-neutral-900 dark:text-neutral-50">어디서 쓰이나요</div>
+      <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
+        <div>1. 연결된 데이터 소스는 기존 문서 저장소로 들어와 문서 탐색과 시맨틱 검색에서 바로 보입니다.</div>
+        <div>2. 동기화된 문서는 직접 작성한 문서와 같은 방식으로 용어집 후보와 대표 문서 생성에 사용됩니다.</div>
+        <div>3. 대부분의 사용자는 연결 화면보다 문서 화면에서 결과를 체감하게 됩니다.</div>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-3 text-sm">
+        <Link href="/docs" className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
+          문서 탐색 열기 <ArrowRight className="size-4" />
+        </Link>
+        <Link href="/search" className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
+          시맨틱 검색 열기 <ArrowRight className="size-4" />
+        </Link>
+      </div>
+    </Card>
+  )
+}
+
 export function ConnectorsPage() {
-  const searchParams = useSearchParams()
-  const queryClient = useQueryClient()
-  const errorMessage = getErrorMessage(searchParams)
   const [showPersonalConnections, setShowPersonalConnections] = useState(false)
-  const loginHref = `/login?return_to=${encodeURIComponent('/connectors')}`
-  const isDevelopment = process.env.NODE_ENV !== 'production'
-
-  const authQuery = useQuery({
-    queryKey: ['auth-me'],
-    queryFn: () => fetchJson<AuthMeResponse>('/api/auth/me'),
-  })
-
-  const readinessQuery = useQuery({
-    queryKey: ['connectors-readiness'],
-    queryFn: () => fetchJson<ConnectorReadinessResponse>('/api/connectors/readiness'),
-  })
-
-  const workspaceQuery = useQuery({
-    queryKey: ['connectors', 'workspace'],
-    queryFn: () => fetchJson<ConnectorListResponse>('/api/connectors?scope=workspace'),
-    enabled: authQuery.data?.authenticated === true,
-  })
-
-  const personalQuery = useQuery({
-    queryKey: ['connectors', 'personal'],
-    queryFn: () => fetchJson<ConnectorListResponse>('/api/connectors?scope=personal'),
-    enabled: authQuery.data?.authenticated === true,
-  })
+  const queryClient = useQueryClient()
+  const {
+    authQuery,
+    authenticated,
+    canManageWorkspaceConnectors,
+    errorMessage,
+    healthySourceCount,
+    isDevelopment,
+    loginHref,
+    logoutMutation,
+    needsAttentionCount,
+    personalConnections,
+    readinessByProvider,
+    readinessQuery,
+    user,
+    workspaceConnections,
+    workspaceReady,
+    workspaceResourceRecords,
+    workspaceSetupState,
+  } = useConnectorsBaseData()
 
   const workspaceInvitationsQuery = useQuery({
     queryKey: ['workspace-invitations'],
@@ -1954,116 +2227,20 @@ export function ConnectorsPage() {
         body: JSON.stringify({ email }),
       }),
   })
-
-  const logoutMutation = useMutation({
-    mutationFn: async () =>
-      fetchJson<{ ok: boolean }>('/api/auth/logout', {
-        method: 'POST',
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['auth-me'] })
-      await queryClient.invalidateQueries({ queryKey: ['connectors-readiness'] })
-      await queryClient.invalidateQueries({ queryKey: ['connectors'] })
-    },
-  })
-
-  const authenticated = authQuery.data?.authenticated === true
-  const user = authQuery.data?.user ?? null
-  const canManageWorkspaceConnectors = user?.can_manage_workspace_connectors === true
-  const readinessByProvider = useMemo(
-    () => new Map((readinessQuery.data?.providers ?? []).map((item) => [item.provider, item])),
-    [readinessQuery.data],
-  )
-  const workspaceConnections = workspaceQuery.data?.items ?? []
-  const personalConnections = personalQuery.data?.items ?? []
-  const workspaceReady = Array.from(readinessByProvider.values()).some((item) => item.workspace_connection_exists)
-  const healthySourceCount = Array.from(readinessByProvider.values()).reduce(
-    (sum, item) => sum + item.healthy_source_count,
-    0,
-  )
-  const needsAttentionCount = Array.from(readinessByProvider.values()).reduce(
-    (sum, item) => sum + item.needs_attention_count,
-    0,
-  )
-  const workspaceSetupState = Array.from(readinessByProvider.values()).some((item) => item.setup_state === 'attention_required')
-    ? 'attention_required'
-    : Array.from(readinessByProvider.values()).some((item) => item.setup_state === 'ready')
-      ? 'ready'
-      : Array.from(readinessByProvider.values()).some((item) => item.setup_state === 'setup_needed')
-        ? 'setup_needed'
-        : 'not_configured'
-  const workspaceResourceRecords = workspaceConnections.flatMap((connection) =>
-    connection.resources.map((resource) => ({
-      connection,
-      resource,
-    })),
-  )
   const title = !authenticated ? '데이터 소스 설정' : canManageWorkspaceConnectors ? '워크스페이스 데이터 소스' : '워크스페이스 데이터 소스 상태'
 
   return (
     <div className="space-y-4">
-      <Card className="p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-              <Link2 className="size-4 text-blue-500" /> 데이터 소스 설정
-            </div>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{title}</h1>
-            <p className="mt-2 text-sm leading-7 text-neutral-500">
-              관리자는 팀의 Google Drive, GitHub, Notion을 한 번 연결하고, 구성원은 별도 설정 없이 검색과 문서 탐색에서 같은 지식을 바로 사용합니다.
-            </p>
-          </div>
-          <div className="rounded-2xl border border-neutral-200 px-4 py-3 dark:border-neutral-800">
-            {authenticated && user ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-                  <UserRound className="size-4 text-blue-500" />
-                  {user.name}
-                </div>
-                <div className="text-sm text-neutral-600 dark:text-neutral-400">{user.email}</div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge>{canManageWorkspaceConnectors ? '워크스페이스 관리자' : '구성원'}</Badge>
-                  {user.current_workspace ? <Badge>{user.current_workspace.name}</Badge> : null}
-                  {user.current_workspace_role ? <Badge>{user.current_workspace_role}</Badge> : null}
-                  <Badge>최근 로그인 {formatDate(user.last_login_at)}</Badge>
-                </div>
-                <Button size="sm" variant="outline" onClick={() => logoutMutation.mutate()} disabled={logoutMutation.isPending}>
-                  로그아웃
-                </Button>
-              </div>
-	            ) : (
-	              <div className="space-y-3">
-	                <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-	                  <Lock className="size-4 text-blue-500" /> 로그인 필요
-	                </div>
-	                <div className="text-sm text-neutral-500">
-	                  헤더, 사이드바, 또는 이 버튼에서 같은 로그인 페이지로 이동할 수 있습니다. 로그인 후에는 원래 보던 연결 흐름으로 바로 돌아옵니다.
-	                </div>
-	                <Button size="sm" onClick={() => window.location.assign(loginHref)}>
-	                  로그인하기
-	                </Button>
-                {isDevelopment ? (
-                  <div className="text-xs text-neutral-400">
-                    로컬에서는 로그인한 이메일이 <code>ADMIN_EMAILS</code>에 포함돼야 조직 연결 관리가 열립니다.
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {errorMessage ? (
-          <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/20 dark:text-red-300">
-            {errorMessage}
-          </div>
-        ) : null}
-
-        {!canManageWorkspaceConnectors ? (
-          <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
-            로그인한 이메일이 관리자 목록에 포함되면 조직 연결 관리가 열립니다.
-          </div>
-        ) : null}
-      </Card>
+      <ConnectorsHero
+        title={title}
+        authenticated={authenticated}
+        user={user}
+        canManageWorkspaceConnectors={canManageWorkspaceConnectors}
+        loginHref={loginHref}
+        logoutMutation={logoutMutation}
+        errorMessage={errorMessage}
+        isDevelopment={isDevelopment}
+      />
 
       {readinessQuery.isLoading ? (
         <Card className="p-5">
@@ -2074,31 +2251,12 @@ export function ConnectorsPage() {
       ) : null}
 
       {!readinessQuery.isLoading ? (
-        <Card className="p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">워크스페이스 지식 레이어 상태</div>
-              <div className="mt-1 text-sm text-neutral-500">
-                기본 흐름은 관리자 한 번 연결, 구성원 즉시 활용입니다.
-              </div>
-            </div>
-            <Badge>{formatSetupStateLabel(workspaceSetupState)}</Badge>
-          </div>
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm dark:border-neutral-800">
-              <div className="text-neutral-500">연결된 워크스페이스 소스</div>
-              <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{workspaceResourceRecords.length}</div>
-            </div>
-            <div className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm dark:border-neutral-800">
-              <div className="text-neutral-500">정상 상태</div>
-              <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{healthySourceCount}</div>
-            </div>
-            <div className="rounded-2xl border border-neutral-200 px-4 py-4 text-sm dark:border-neutral-800">
-              <div className="text-neutral-500">조치 필요</div>
-              <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{needsAttentionCount}</div>
-            </div>
-          </div>
-        </Card>
+        <ConnectorsOverviewIntro
+          workspaceSetupState={workspaceSetupState}
+          workspaceResourceRecordsCount={workspaceResourceRecords.length}
+          healthySourceCount={healthySourceCount}
+          needsAttentionCount={needsAttentionCount}
+        />
       ) : null}
 
       {!authenticated ? (
@@ -2145,6 +2303,8 @@ export function ConnectorsPage() {
             authenticated={true}
             readinessByProvider={readinessByProvider}
             connections={workspaceConnections}
+            showManagement={false}
+            readOnlyRecordsTitle={workspaceResourceRecords.length > 0 ? '현재 제공 중인 조직 데이터' : undefined}
           />
 
           <Card className="p-5">
@@ -2162,15 +2322,17 @@ export function ConnectorsPage() {
           </Card>
 
           {showPersonalConnections ? (
-              <ScopeSection
-                title="내 연결"
-                description="개인 소스는 보조 경로입니다. 조직 연결이 이미 준비되어 있다면 대부분은 추가 연결 없이 사용할 수 있습니다."
-                scope="personal"
-                canManage={authenticated}
-                authenticated={true}
-                readinessByProvider={readinessByProvider}
-                connections={personalConnections}
-              />
+            <ScopeSection
+              title="내 연결"
+              description="개인 소스는 보조 경로입니다. 조직 연결이 이미 준비되어 있다면 대부분은 추가 연결 없이 사용할 수 있습니다."
+              scope="personal"
+              canManage={authenticated}
+              authenticated={true}
+              readinessByProvider={readinessByProvider}
+              connections={personalConnections}
+              showManagement={false}
+              readOnlyRecordsTitle={personalConnections.length > 0 ? '현재 제공 중인 내 데이터' : undefined}
+            />
             ) : null}
         </>
       ) : (
@@ -2229,22 +2391,300 @@ export function ConnectorsPage() {
         </>
       )}
 
-      <Card className="p-5">
-        <div className="mb-3 text-sm font-semibold text-neutral-900 dark:text-neutral-50">어디서 쓰이나요</div>
-        <div className="space-y-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
-          <div>1. 연결된 데이터 소스는 기존 문서 저장소로 들어와 문서 탐색과 시맨틱 검색에서 바로 보입니다.</div>
-          <div>2. 동기화된 문서는 직접 작성한 문서와 같은 방식으로 용어집 후보와 대표 문서 생성에 사용됩니다.</div>
-          <div>3. 대부분의 사용자는 연결 화면보다 문서 화면에서 결과를 체감하게 됩니다.</div>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-3 text-sm">
-          <Link href="/docs" className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
-            문서 탐색 열기 <ArrowRight className="size-4" />
-          </Link>
-          <Link href="/search" className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
-            시맨틱 검색 열기 <ArrowRight className="size-4" />
-          </Link>
+      <ConnectorPageFooter />
+    </div>
+  )
+}
+
+export function ConnectorSetupPage({
+  providerPath,
+  scope,
+  connectionId,
+  template,
+}: {
+  providerPath: string
+  scope: Scope
+  connectionId?: string | null
+  template?: string | null
+}) {
+  const {
+    authenticated,
+    canManageWorkspaceConnectors,
+    errorMessage,
+    loginHref,
+    logoutMutation,
+    personalConnections,
+    readinessByProvider,
+    readinessQuery,
+    user,
+    workspaceConnections,
+  } = useConnectorsBaseData()
+
+  const provider = providerDefinitionByPath(providerPath)
+  const fallbackTitle = '연결 설정'
+  const connection =
+    (connectionId ? findConnectionById(connectionId, workspaceConnections, personalConnections) : null) ??
+    [...workspaceConnections, ...personalConnections].find(
+      (item) => item.provider === provider?.key && item.owner_scope === scope,
+    ) ??
+    null
+
+  if (!provider) {
+    return (
+      <Card className="p-6">
+        <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">{fallbackTitle}</div>
+        <div className="mt-2 text-sm text-neutral-500">지원하지 않는 데이터 소스입니다.</div>
+        <div className="mt-4">
+          <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+            데이터 소스 개요로 돌아가기
+          </Button>
         </div>
       </Card>
+    )
+  }
+
+  const returnTo = buildConnectorsSetupHref(provider.path, scope, {
+    connectionId: connection?.id ?? connectionId ?? null,
+    template,
+  })
+  const canManage = scope === 'workspace' ? canManageWorkspaceConnectors : authenticated
+  const readiness = readinessByProvider.get(provider.key) ?? null
+  const oauthConfigured = readiness?.oauth_configured === true
+  const connectStartHref = connectHref(provider, scope, returnTo)
+  const loginStartHref = loginConnectHref(provider, scope, returnTo)
+  const connectionTitle = scope === 'workspace' ? `${provider.label} 조직 연결 설정` : `${provider.label} 내 연결 설정`
+
+  return (
+    <div className="space-y-4">
+      <ConnectorsHero
+        title={connectionTitle}
+        authenticated={authenticated}
+        user={user}
+        canManageWorkspaceConnectors={canManageWorkspaceConnectors}
+        loginHref={loginHref}
+        logoutMutation={logoutMutation}
+        errorMessage={errorMessage}
+        isDevelopment={process.env.NODE_ENV !== 'production'}
+      />
+
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">설정 단계</div>
+            <div className="mt-1 text-sm text-neutral-500">
+              {scope === 'workspace'
+                ? '개요에서는 상태만 보고, 이 페이지에서 실제 연결과 리소스 선택을 진행합니다.'
+                : '개인 보조 소스는 이 페이지에서만 선택하고 연결합니다.'}
+            </div>
+          </div>
+          <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+            개요로 돌아가기
+          </Button>
+        </div>
+      </Card>
+
+      {readinessQuery.isLoading ? (
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm text-neutral-500">
+            <LoaderCircle className="size-4 animate-spin" /> 데이터 소스 준비 상태를 확인하는 중입니다.
+          </div>
+        </Card>
+      ) : null}
+
+      {!authenticated ? (
+        <Card className="p-6">
+          <div className="space-y-3">
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">로그인이 필요합니다</div>
+            <div className="text-sm leading-7 text-neutral-500">
+              로그인 후 다시 이 페이지로 돌아와 바로 {provider.label} 연결을 이어갑니다.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => window.location.assign(loginStartHref)}>로그인하고 시작하기</Button>
+              <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+                개요 보기
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {authenticated && !oauthConfigured ? (
+        <Card className="p-6">
+          <div className="space-y-3">
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">아직 연결을 시작할 수 없습니다</div>
+            <div className="text-sm leading-7 text-neutral-500">
+              서비스 운영자가 {provider.label} OAuth 설정을 마쳐야 이 페이지에서 실제 연결을 진행할 수 있습니다.
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {authenticated && oauthConfigured && !canManage ? (
+        <Card className="p-6">
+          <div className="space-y-3">
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">관리 권한이 필요합니다</div>
+            <div className="text-sm leading-7 text-neutral-500">
+              조직 데이터 소스는 워크스페이스 관리자만 연결하거나 수정할 수 있습니다. 현재 상태는 개요와 상세 화면에서 읽기 전용으로 확인할 수 있습니다.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {connection ? (
+                <Button variant="outline" onClick={() => window.location.assign(buildConnectorConnectionHref(connection.id))}>
+                  상태 보기
+                </Button>
+              ) : null}
+              <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+                개요로 돌아가기
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {authenticated && oauthConfigured && canManage && !connection ? (
+        <Card className="p-6">
+          <div className="space-y-3">
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">{provider.label} 계정 연결</div>
+            <div className="text-sm leading-7 text-neutral-500">
+              먼저 계정을 연결해야 저장소, 폴더, 페이지 같은 실제 항목을 선택할 수 있습니다. 연결이 끝나면 이 페이지로 자동 복귀합니다.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => window.location.assign(connectStartHref)}>{providerActionLabel(provider, scope)}</Button>
+              <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+                개요로 돌아가기
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {connection ? (
+        <>
+          <ConnectionManager key={connection.id} connection={connection} canManage={canManageConnection(connection, authenticated, canManageWorkspaceConnectors)} />
+          <ResourceTable
+            title={scope === 'workspace' ? '이 조직 연결에서 가져오는 항목' : '이 연결에서 가져오는 항목'}
+            records={connection.resources.map((resource) => ({ connection, resource }))}
+            canManage={canManageConnection(connection, authenticated, canManageWorkspaceConnectors)}
+          />
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+export function ConnectorConnectionPage({
+  connectionId,
+}: {
+  connectionId: string
+}) {
+  const {
+    authenticated,
+    canManageWorkspaceConnectors,
+    errorMessage,
+    loginHref,
+    logoutMutation,
+    personalConnections,
+    readinessQuery,
+    user,
+    workspaceConnections,
+  } = useConnectorsBaseData()
+
+  const connection = findConnectionById(connectionId, workspaceConnections, personalConnections)
+  const canManage = connection ? canManageConnection(connection, authenticated, canManageWorkspaceConnectors) : false
+
+  return (
+    <div className="space-y-4">
+      <ConnectorsHero
+        title={connection ? `${connection.display_name} 연결 관리` : '연결 상세'}
+        authenticated={authenticated}
+        user={user}
+        canManageWorkspaceConnectors={canManageWorkspaceConnectors}
+        loginHref={loginHref}
+        logoutMutation={logoutMutation}
+        errorMessage={errorMessage}
+        isDevelopment={process.env.NODE_ENV !== 'production'}
+      />
+
+      <Card className="p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">연결 상세</div>
+            <div className="mt-1 text-sm text-neutral-500">
+              개요 페이지에서는 상태만 보고, 이 화면에서 한 연결의 리소스와 동기화 설정을 확인하거나 관리합니다.
+            </div>
+          </div>
+          <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+            개요로 돌아가기
+          </Button>
+        </div>
+      </Card>
+
+      {readinessQuery.isLoading ? (
+        <Card className="p-5">
+          <div className="flex items-center gap-2 text-sm text-neutral-500">
+            <LoaderCircle className="size-4 animate-spin" /> 연결 상태를 확인하는 중입니다.
+          </div>
+        </Card>
+      ) : null}
+
+      {!authenticated ? (
+        <Card className="p-6">
+          <div className="space-y-3">
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">로그인이 필요합니다</div>
+            <div className="text-sm leading-7 text-neutral-500">연결 상세는 로그인 후 워크스페이스 권한에 맞게 표시됩니다.</div>
+            <Button onClick={() => window.location.assign(`/login?return_to=${encodeURIComponent(buildConnectorConnectionHref(connectionId))}`)}>
+              로그인하고 보기
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {authenticated && !connection ? (
+        <Card className="p-6">
+          <div className="space-y-3">
+            <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">연결을 찾지 못했습니다</div>
+            <div className="text-sm leading-7 text-neutral-500">
+              이미 삭제되었거나 현재 계정이 볼 수 없는 연결입니다.
+            </div>
+            <Button variant="outline" onClick={() => window.location.assign('/connectors')}>
+              개요로 돌아가기
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
+      {authenticated && connection ? (
+        canManage ? (
+          <>
+            <ConnectionManager connection={connection} canManage={true} />
+            <ResourceTable
+              title={connection.owner_scope === 'workspace' ? '이 조직 연결에서 가져오는 항목' : '이 연결에서 가져오는 항목'}
+              records={connection.resources.map((resource) => ({ connection, resource }))}
+              canManage={true}
+            />
+          </>
+        ) : (
+          <>
+            <Card className="p-6">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="text-lg font-semibold text-neutral-950 dark:text-neutral-50">{connection.display_name}</div>
+                <Badge>{formatConnectorProviderLabel(connection.provider)}</Badge>
+                <Badge>{formatConnectorStatusLabel(connection.status)}</Badge>
+                <Badge>{connection.owner_scope === 'workspace' ? '조직 연결' : '내 연결'}</Badge>
+              </div>
+              <div className="mt-3 text-sm text-neutral-500">
+                {connection.account_email || '계정 이메일 정보 없음'} · 최근 검증 {formatDate(connection.last_validated_at)}
+              </div>
+              <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-900 dark:bg-blue-950/20 dark:text-blue-300">
+                이 연결은 읽기 전용입니다. 리소스 상태만 확인할 수 있고 수정은 관리자만 할 수 있습니다.
+              </div>
+            </Card>
+            <ConnectedResourcesList
+              title={connection.owner_scope === 'workspace' ? '현재 제공 중인 조직 데이터' : '현재 제공 중인 내 데이터'}
+              records={connection.resources.map((resource) => ({ connection, resource }))}
+            />
+          </>
+        )
+      ) : null}
     </div>
   )
 }

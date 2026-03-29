@@ -81,6 +81,40 @@ class GlossaryRefreshRequest(BaseModel):
     scope: Literal["full", "incremental"] = "full"
 
 
+class GlossaryConceptRequestCreateRequest(BaseModel):
+    term: str
+    aliases: list[str] = Field(default_factory=list)
+    request_note: str | None = None
+    owner_team_hint: str | None = None
+
+
+class GlossaryConceptRequestResponse(BaseModel):
+    request_status: Literal["created", "updated_existing", "already_exists"]
+    message: str
+    concept: GlossaryConceptSummary
+
+
+class GlossaryConceptRequestListEntry(BaseModel):
+    requested_by_name: str | None = None
+    requested_by_email: str | None = None
+    request_note: str | None = None
+    requested_at: datetime | None = None
+    owner_team_hint: str | None = None
+
+
+class GlossaryConceptRequestListItem(BaseModel):
+    concept: GlossaryConceptSummary
+    latest_request: GlossaryConceptRequestListEntry
+    request_count: int
+
+
+class GlossaryConceptRequestListResponse(BaseModel):
+    items: list[GlossaryConceptRequestListItem] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+
+
 class GlossaryValidationRunCreateRequest(BaseModel):
     mode: Literal["sync_validate_impacted", "sync_validate_full", "validate_term"] = "sync_validate_impacted"
     target_concept_id: UUID | None = None

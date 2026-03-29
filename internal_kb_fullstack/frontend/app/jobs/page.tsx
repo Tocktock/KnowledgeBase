@@ -1,12 +1,7 @@
 import { ManageAccessGuard } from '@/components/auth/manage-access-guard'
 import { JobsPage } from '@/components/jobs/jobs-page'
-import { getJobs } from '@/lib/api/server'
 
-export const dynamic = 'force-dynamic'
-
-export default async function JobsRoutePage() {
-  const jobs = await getJobs().catch(() => [])
-
+export default function JobsRoutePage() {
   return (
     <ManageAccessGuard
       title="동기화 상태"
@@ -17,7 +12,7 @@ export default async function JobsRoutePage() {
           <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">동기화 상태</h1>
           <p className="mt-2 text-sm leading-7 text-neutral-500">문서 동기화, 개념 갱신, 실패 작업을 점검하고 조치가 필요한 소스를 찾습니다.</p>
         </div>
-        <JobsPage jobs={jobs} />
+        <JobsPage />
       </div>
     </ManageAccessGuard>
   )

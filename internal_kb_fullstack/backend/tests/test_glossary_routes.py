@@ -15,6 +15,10 @@ from app.main import app
 from app.schemas.glossary import (
     GlossaryConceptDetailResponse,
     GlossaryConceptDocumentLink,
+    GlossaryConceptRequestListEntry,
+    GlossaryConceptRequestListItem,
+    GlossaryConceptRequestListResponse,
+    GlossaryConceptRequestResponse,
     GlossaryConceptSummary,
     GlossarySupportItem,
     GlossaryValidationRunSummary,
@@ -311,6 +315,130 @@ async def test_create_validation_run_route_returns_summary(monkeypatch: pytest.M
     assert response.status_code == 202
     assert response.json()["mode"] == "sync_validate_impacted"
     assert response.json()["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_glossary_request_route_returns_created_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_user = make_auth_user(role="member")
+    summary = make_glossary_summary()
+
+    async def override_session():
+        yield object()
+
+    async def fake_create_glossary_concept_request(
+        _session: object,
+        *,
+        workspace_id,
+        requested_by_user_id,
+        requested_by_name,
+        requested_by_email,
+        payload,
+    ) -> GlossaryConceptRequestResponse:
+        assert workspace_id == auth_user.current_workspace_id
+        assert requested_by_user_id == auth_user.user.id
+        assert requested_by_name == auth_user.user.name
+        assert requested_by_email == auth_user.user.email
+        assert payload.term == "신규 용어"
+        return GlossaryConceptRequestResponse(
+            request_status="created",
+            message="새 핵심 개념 요청을 등록했습니다.",
+            concept=summary,
+        )
+
+    monkeypatch.setattr(glossary_route, "create_glossary_concept_request", fake_create_glossary_concept_request)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/v1/glossary/requests",
+            json={"term": "신규 용어", "aliases": ["신규 개념"], "request_note": "운영에서 계속 씁니다."},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request_status"] == "created"
+    assert payload["concept"]["display_term"] == "센디 차량"
+
+
+@pytest.mark.asyncio
+async def test_glossary_request_route_requires_workspace_membership() -> None:
+    auth_user = AuthenticatedUser(
+        user=SimpleNamespace(id=uuid4(), email="member@example.com", name="Member", avatar_url=None),
+        roles=["member"],
+        current_workspace_id=None,
+        current_workspace_slug=None,
+        current_workspace_name=None,
+        current_workspace_role=None,
+    )
+
+    async def override_session():
+        yield object()
+
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post("/v1/glossary/requests", json={"term": "신규 용어"})
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Glossary requests require an active workspace membership."
+
+
+@pytest.mark.asyncio
+async def test_glossary_request_list_route_returns_current_user_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_user = make_auth_user(role="member")
+    summary = make_glossary_summary()
+
+    async def override_session():
+        yield object()
+
+    async def fake_list_glossary_concept_requests_for_user(_session: object, *, workspace_id, requested_by_user_id, limit: int, offset: int):
+        assert workspace_id == auth_user.current_workspace_id
+        assert requested_by_user_id == auth_user.user.id
+        assert limit == 20
+        assert offset == 0
+        return GlossaryConceptRequestListResponse(
+            items=[
+                GlossaryConceptRequestListItem(
+                    concept=summary,
+                    latest_request=GlossaryConceptRequestListEntry(
+                        requested_by_name=auth_user.user.name,
+                        requested_by_email=auth_user.user.email,
+                        request_note="운영에서 계속 쓰입니다.",
+                        requested_at=datetime.now(timezone.utc),
+                        owner_team_hint="operations",
+                    ),
+                    request_count=2,
+                )
+            ],
+            total=1,
+            limit=20,
+            offset=0,
+        )
+
+    monkeypatch.setattr(glossary_route, "list_glossary_concept_requests_for_user", fake_list_glossary_concept_requests_for_user)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/v1/glossary/requests")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["request_count"] == 2
+    assert payload["items"][0]["concept"]["display_term"] == "센디 차량"
+    assert payload["items"][0]["latest_request"]["request_note"] == "운영에서 계속 쓰입니다."
 
 
 @pytest.mark.asyncio

@@ -19,13 +19,13 @@ import {
   Workflow,
 } from 'lucide-react'
 import Link from 'next/link'
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 
 import { CommandPalette } from '@/components/command-palette'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import type { AuthMeResponse, DocumentListItem, UserSummary } from '@/lib/types'
+import type { AuthMeResponse, DocumentListResponse, UserSummary } from '@/lib/types'
 import { cn, formatDate } from '@/lib/utils'
 import { useUiStore } from '@/store/ui-store'
 
@@ -154,11 +154,11 @@ function AccountDropdown({
 
   const triggerClassName =
     variant === 'header'
-      ? 'h-9 rounded-xl border border-neutral-200 bg-white px-3 text-sm text-neutral-800 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100 dark:hover:bg-neutral-900'
+      ? 'min-h-9 max-w-full rounded-xl border border-neutral-200 bg-white px-2 py-1.5 text-sm text-neutral-800 hover:bg-neutral-50 sm:px-3 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100 dark:hover:bg-neutral-900'
       : 'w-full rounded-2xl border border-neutral-200 bg-white px-4 py-3 text-left text-sm text-neutral-800 hover:bg-neutral-50 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100 dark:hover:bg-neutral-900'
   const menuClassName =
     variant === 'header'
-      ? 'right-0 mt-2 w-80'
+      ? 'right-0 mt-2 w-[min(20rem,calc(100vw-2rem))]'
       : 'left-0 mt-2 w-full'
 
   return (
@@ -166,12 +166,13 @@ function AccountDropdown({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
+        aria-label={variant === 'header' ? '계정 메뉴 열기' : '사이드바 계정 메뉴 열기'}
         className={cn(
-          'inline-flex items-center gap-2 transition',
+          'inline-flex max-w-full items-center gap-2 transition',
           triggerClassName,
         )}
       >
-        <div className="flex size-8 items-center justify-center rounded-full bg-blue-600 text-white">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white">
           <UserRound className="size-4" />
         </div>
         <div className={cn('min-w-0', variant === 'header' ? 'hidden text-left sm:block' : 'flex-1')}>
@@ -190,7 +191,7 @@ function AccountDropdown({
         >
           <div className="space-y-1">
             <div className="text-sm font-semibold text-neutral-950 dark:text-neutral-50">{user.name}</div>
-            <div className="text-sm text-neutral-500 dark:text-neutral-400">{user.email}</div>
+            <div className="break-all text-sm text-neutral-500 dark:text-neutral-400">{user.email}</div>
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
@@ -218,24 +219,30 @@ function AccountDropdown({
   )
 }
 
-export function AppShell({
-  recentDocs,
-  children,
-}: {
-  recentDocs: DocumentListItem[]
-  children: ReactNode
-}) {
+export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname()
-  const searchParams = useSearchParams()
   const queryClient = useQueryClient()
   const { setCommandOpen, mobileSidebarOpen, setMobileSidebarOpen } = useUiStore()
-  const currentSearch = searchParams.toString()
+  const [currentSearch, setCurrentSearch] = useState('')
+
+  useEffect(() => {
+    const nextSearch = window.location.search.startsWith('?')
+      ? window.location.search.slice(1)
+      : window.location.search
+    setCurrentSearch((current) => (current === nextSearch ? current : nextSearch))
+  })
+
   const returnTo = useMemo(() => buildReturnTo(pathname, currentSearch), [currentSearch, pathname])
   const loginHref = useMemo(() => buildLoginHref(returnTo), [returnTo])
 
   const authQuery = useQuery({
     queryKey: ['auth-me'],
     queryFn: () => fetchJson<AuthMeResponse>('/api/auth/me'),
+  })
+  const recentDocsQuery = useQuery({
+    queryKey: ['recent-documents', 12],
+    queryFn: () => fetchJson<DocumentListResponse>('/api/documents?limit=12'),
+    staleTime: 60_000,
   })
 
   const logoutMutation = useMutation({
@@ -256,21 +263,30 @@ export function AppShell({
 
   const authenticated = authQuery.data?.authenticated === true
   const user = authQuery.data?.user ?? null
+  const recentDocs = recentDocsQuery.data?.items ?? []
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_40%),linear-gradient(to_bottom,_rgba(255,255,255,1),_rgba(249,250,251,1))] text-neutral-900 dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.1),_transparent_35%),linear-gradient(to_bottom,_rgba(10,10,10,1),_rgba(17,17,17,1))] dark:text-neutral-100">
       <CommandPalette />
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          aria-label="사이드바 닫기"
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-neutral-950/45 lg:hidden"
+        />
+      ) : null}
       <div className="mx-auto grid min-h-screen max-w-[1600px] grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-40 w-[280px] border-r border-neutral-200 bg-white/85 p-5 backdrop-blur-xl transition-transform dark:border-neutral-800 dark:bg-neutral-950/85 lg:sticky lg:translate-x-0',
+            'fixed inset-y-0 left-0 z-40 w-[280px] overflow-y-auto border-r border-neutral-200 bg-white/85 p-5 backdrop-blur-xl transition-transform dark:border-neutral-800 dark:bg-neutral-950/85 lg:sticky lg:translate-x-0',
             mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >
           <div className="mb-6 flex items-center justify-between lg:justify-start">
-            <Link href="/" className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/25">KB</div>
-              <div>
+            <Link href="/" className="flex min-w-0 items-center gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/25">KB</div>
+              <div className="min-w-0">
                 <div className="text-sm font-semibold">Internal Knowledge</div>
                 <div className="text-xs text-neutral-500">Workspace Knowledge Layer</div>
               </div>
@@ -284,8 +300,8 @@ export function AppShell({
             onClick={() => setCommandOpen(true)}
             className="mb-6 flex h-11 w-full items-center gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 text-sm text-neutral-500 transition hover:border-blue-300 hover:text-neutral-900 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400 dark:hover:border-blue-700 dark:hover:text-neutral-100"
           >
-            <Search className="size-4" />
-            <span className="flex-1 text-left">빠른 이동 / 검색</span>
+            <Search className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-left">빠른 이동 / 검색</span>
             <Badge>⌘K</Badge>
           </button>
 
@@ -327,8 +343,8 @@ export function AppShell({
                           : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900 dark:hover:text-neutral-50',
                       )}
                     >
-                      <Icon className="size-4" />
-                      {item.label}
+                      <Icon className="size-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">{item.label}</span>
                     </Link>
                   )
                 })}
@@ -353,8 +369,8 @@ export function AppShell({
                             : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900 dark:hover:text-neutral-50',
                         )}
                       >
-                        <Icon className="size-4" />
-                        {item.label}
+                        <Icon className="size-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
                       </Link>
                     )
                   })}
@@ -380,8 +396,8 @@ export function AppShell({
                             : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 dark:text-neutral-300 dark:hover:bg-neutral-900 dark:hover:text-neutral-50',
                         )}
                       >
-                        <Icon className="size-4" />
-                        {item.label}
+                        <Icon className="size-4 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
                       </Link>
                     )
                   })}
@@ -394,18 +410,24 @@ export function AppShell({
             <div className="mb-3 flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
               <Clock3 className="size-3.5" /> 최근 업데이트
             </div>
-            <div className="space-y-1">
-              {recentDocs.slice(0, 10).map((doc) => (
-                <Link
-                  key={doc.id}
-                  href={`/docs/${doc.slug}`}
-                  className="block rounded-2xl px-3 py-2.5 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
-                >
-                  <div className="line-clamp-1 text-sm font-medium text-neutral-800 dark:text-neutral-200">{doc.title}</div>
-                  <div className="line-clamp-1 text-xs text-neutral-400">/{doc.slug}</div>
-                </Link>
-              ))}
-            </div>
+            {recentDocsQuery.isLoading ? (
+              <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">최근 문서를 불러오는 중입니다.</div>
+            ) : recentDocs.length > 0 ? (
+              <div className="space-y-1">
+                {recentDocs.slice(0, 10).map((doc) => (
+                  <Link
+                    key={doc.id}
+                    href={`/docs/${doc.slug}`}
+                    className="block rounded-2xl px-3 py-2.5 transition hover:bg-neutral-100 dark:hover:bg-neutral-900"
+                  >
+                    <div className="line-clamp-2 text-sm font-medium text-neutral-800 dark:text-neutral-200">{doc.title}</div>
+                    <div className="line-clamp-1 text-xs text-neutral-400">/{doc.slug}</div>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div className="px-3 py-2 text-sm text-neutral-500 dark:text-neutral-400">최근 표시할 문서가 없습니다.</div>
+            )}
           </div>
         </aside>
 
@@ -415,7 +437,7 @@ export function AppShell({
               <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileSidebarOpen(true)}>
                 <Menu className="size-4" />
               </Button>
-              <div className="flex-1 text-sm text-neutral-500 dark:text-neutral-400">
+              <div className="hidden min-w-0 flex-1 text-sm text-neutral-500 line-clamp-1 dark:text-neutral-400 md:block">
                 연결된 팀 지식을 검색 가능한 워크스페이스 컨텍스트로 정리합니다.
               </div>
               <AccountDropdown

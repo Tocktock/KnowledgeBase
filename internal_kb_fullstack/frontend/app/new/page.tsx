@@ -1,7 +1,5 @@
-import { DocumentEditor } from '@/components/editor/document-editor'
-
-export const dynamic = 'force-dynamic'
+import { DocumentModeChooserPage } from '@/components/editor/document-editor'
 
 export default function NewDocumentPage() {
-  return <DocumentEditor />
+  return <DocumentModeChooserPage />
 }

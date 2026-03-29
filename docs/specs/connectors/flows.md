@@ -4,9 +4,9 @@
 
 ### Anonymous
 
-- The page explains the value of connected sources.
-- Provider cards and recommended templates are visible.
-- Protected actions redirect to `/login` with connector continuation parameters.
+- `/connectors` explains the value of connected sources.
+- Provider cards and recommended templates are visible on the overview.
+- Protected actions redirect to `/login` with connector continuation parameters and return to `/connectors/setup/[provider]`.
 
 ### Member
 
@@ -22,12 +22,13 @@
 ## Live-source setup flow
 
 1. Choose a provider card.
-2. Start provider OAuth if a connection does not already exist.
-3. Browse or search provider resources.
-4. Select the source.
-5. Confirm sync policy and visibility scope.
-6. Create the connector resource.
-7. Optionally trigger or wait for the first sync.
+2. Move into `/connectors/setup/[provider]`.
+3. Start provider OAuth if a connection does not already exist.
+4. Browse or search provider resources.
+5. Select the source.
+6. Confirm sync policy and visibility scope.
+7. Create the connector resource.
+8. Continue per-resource management from `/connectors/[connectionId]`.
 
 ## Upload-backed evidence flow
 

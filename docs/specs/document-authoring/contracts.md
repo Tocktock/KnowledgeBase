@@ -9,7 +9,25 @@ Canonical schema modules:
 
 ### `GET /new`
 
-- Purpose: manual document authoring and definition-draft entry point.
+- Purpose: mode chooser for manual authoring, upload-first authoring, and definition-draft authoring.
+- Caller: authenticated user.
+- Response: HTML page rendered by the frontend app.
+
+### `GET /new/manual`
+
+- Purpose: dedicated manual document authoring page.
+- Caller: authenticated user.
+- Response: HTML page rendered by the frontend app.
+
+### `GET /new/upload`
+
+- Purpose: dedicated upload-first authoring page.
+- Caller: authenticated user.
+- Response: HTML page rendered by the frontend app.
+
+### `GET /new/definition`
+
+- Purpose: dedicated definition-draft authoring page.
 - Caller: authenticated user.
 - Response: HTML page rendered by the frontend app.
 

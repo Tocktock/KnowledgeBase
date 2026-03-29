@@ -5,8 +5,6 @@ import { getDocsDomainPreset } from '@/lib/document-domains'
 import { formatDocTypeLabel } from '@/lib/utils'
 import { DocsExplorer } from '@/components/docs/docs-explorer'
 
-export const dynamic = 'force-dynamic'
-
 type DocsPageProps = {
   searchParams?: Promise<{
     domain?: string | string[]

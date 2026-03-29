@@ -85,7 +85,7 @@ export function WorkspaceHomePage() {
   return (
     <div className="space-y-8">
       <Card className="overflow-hidden p-6 md:p-8">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_360px]">
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,360px)]">
           <div>
             <div className="mb-3 flex flex-wrap gap-2">
               <Badge>Workspace Knowledge Layer</Badge>
@@ -93,7 +93,7 @@ export function WorkspaceHomePage() {
               {!isAnonymous && overview.viewer_role ? <Badge>{overview.viewer_role}</Badge> : null}
               {needsWorkspaceAccess ? <Badge>워크스페이스 초대 필요</Badge> : null}
             </div>
-            <h1 className="text-4xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">
+            <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 md:text-4xl dark:text-neutral-50">
               {heroTitle}
             </h1>
             <p className="mt-4 max-w-3xl text-sm leading-7 text-neutral-600 dark:text-neutral-400">
@@ -255,7 +255,7 @@ export function WorkspaceHomePage() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_420px]">
+        <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.2fr)_420px]">
           <Card className="p-6">
             <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
               <BookOpenText className="size-4 text-blue-500" /> 추천 문서
@@ -264,7 +264,7 @@ export function WorkspaceHomePage() {
               {overview.featured_docs.map((document) => (
                 <Link key={document.id} href={`/docs/${document.slug}`} className="block rounded-2xl border border-neutral-200 px-4 py-4 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:border-neutral-800 dark:hover:border-blue-900">
                   <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <div className="font-medium text-neutral-900 dark:text-neutral-50">{document.title}</div>
+                    <div className="min-w-0 break-words font-medium text-neutral-900 dark:text-neutral-50">{document.title}</div>
                     <Badge>{formatDocTypeLabel(document.doc_type)}</Badge>
                   </div>
                   <TrustBadges trust={document.trust} />
@@ -286,7 +286,7 @@ export function WorkspaceHomePage() {
                 {overview.featured_concepts.map((concept) => (
                   <Link key={concept.id} href={`/glossary/${concept.slug}`} className="block rounded-2xl border border-neutral-200 px-4 py-4 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:border-neutral-800 dark:hover:border-blue-900">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <div className="font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
+                      <div className="min-w-0 break-words font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
                       <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                     </div>
                     <TrustBadges trust={concept.trust} />

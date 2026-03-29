@@ -79,7 +79,7 @@ export function SemanticSearchPage() {
           연결된 데이터 소스와 내부 문서를 함께 검색합니다. 기본 화면은 바로 판단에 도움이 되는 결과를 보여주고,
           점수와 해석 로직은 필요할 때만 펼쳐볼 수 있습니다.
         </div>
-        <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-[minmax(0,1fr)_200px_200px_auto]">
+        <form onSubmit={onSubmit} className="grid gap-3 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_220px_220px_auto]">
           <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="예: 차량 분류, 배송 운영 정책, 고객 응대 기준" />
           <Input value={docType} onChange={(event) => setDocType(event.target.value)} placeholder="문서 타입 예: knowledge, runbook" />
           <Input value={ownerTeam} onChange={(event) => setOwnerTeam(event.target.value)} placeholder="소유 그룹 예: platform, product" />
@@ -141,8 +141,8 @@ export function SemanticSearchPage() {
         ) : hits.length ? (
           hits.map((hit) => (
             <Card key={hit.chunk_id} className="p-5">
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
+              <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div className="min-w-0">
                   <Link href={`/docs/${hit.document_slug}`} className="text-lg font-semibold text-neutral-950 hover:text-blue-600 dark:text-neutral-50 dark:hover:text-blue-400">
                     {hit.document_title}
                   </Link>
@@ -155,7 +155,7 @@ export function SemanticSearchPage() {
                     ))}
                   </div>
                 </div>
-                <div className="text-right text-xs text-neutral-400">최근 동기화 {formatDate(hit.trust.last_synced_at)}</div>
+                <div className="shrink-0 text-xs text-neutral-400 xl:text-right">최근 동기화 {formatDate(hit.trust.last_synced_at)}</div>
               </div>
               <TrustBadges trust={hit.trust} showSourceLink={Boolean(hit.trust.source_url)} />
               <p className="text-sm leading-7 text-neutral-600 dark:text-neutral-400">{hit.content_text}</p>

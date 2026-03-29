@@ -13,12 +13,18 @@ Document authoring is the manual fallback path for knowledge that does not yet e
 
 - Frontend page:
   - `/new`
+  - `/new/manual`
+  - `/new/upload`
+  - `/new/definition`
 - Backend public routes:
   - write-side document APIs under `/v1/documents/*`
 
 ## Current behavior
 
-- `/new` opens a Markdown-capable editor with structured metadata fields.
+- `/new` is a chooser page for the available authoring modes.
+- `/new/manual` opens the Markdown-capable editor with structured metadata fields.
+- `/new/upload` isolates the file-upload-first flow from the rest of the authoring UI.
+- `/new/definition` isolates the definition-draft generation flow from the rest of the authoring UI.
 - Users can:
   - create a manual document directly
   - upload a file and convert it into a document draft
@@ -31,14 +37,17 @@ Document authoring is the manual fallback path for knowledge that does not yet e
 ## Key workflows
 
 - Manual create:
+  - start at `/new` or go directly to `/new/manual`
   - enter document metadata and Markdown content
   - submit ingest request
   - receive canonical document summary and slug
 - Upload:
+  - start at `/new/upload`
   - upload a supported file
   - backend extracts or normalizes content
-  - editor proceeds with the resulting draft
+  - the flow stays isolated from the manual and definition-first side panels
 - Definition draft generation:
+  - start at `/new/definition`
   - request a generated definition draft from existing concept or support context
   - review and edit the generated content before saving
 - Reindex:

@@ -10,11 +10,19 @@ Canonical schema modules:
 
 ### `GET /glossary/review`
 
-- Purpose: admin-only Knowledge QA surface.
+- Purpose: admin-only Knowledge QA overview and queue surface.
 - Caller: authenticated `owner` or `admin`.
 - Response: HTML page rendered by the frontend app.
 - Important behavior:
   - non-admin viewers receive the explicit manage-access guard instead of the full operational UI
+
+### `GET /glossary/review/[conceptId]`
+
+- Purpose: admin-only dedicated concept review workspace.
+- Caller: authenticated `owner` or `admin`.
+- Response: HTML page rendered by the frontend app.
+- Important behavior:
+  - queue rows navigate here instead of expanding full detail inline on `/glossary/review`
 
 ## Backend glossary operational APIs
 
@@ -49,6 +57,44 @@ Canonical schema modules:
 }
 ```
 
+### `POST /v1/glossary/requests`
+
+- Purpose: create or update a user-requested glossary candidate for admin review.
+- Caller: authenticated workspace member, admin, or owner with an active workspace membership.
+- Request model: `GlossaryConceptRequestCreateRequest`
+- Request fields:
+  - `term`
+  - `aliases`
+  - `request_note`
+  - `owner_team_hint`
+- Response model: `GlossaryConceptRequestResponse`
+- Response status meanings:
+  - `created`: new suggested concept candidate was created
+  - `updated_existing`: a matching non-approved candidate already existed and the new request was appended
+  - `already_exists`: the term already exists as an approved concept
+- Important behavior:
+  - requests never auto-publish a concept
+  - matching approved concepts are returned without opening a duplicate review item
+  - matching suggested or drafted concepts keep one review item and accumulate request context in concept metadata
+- Important error states:
+  - no active workspace membership
+  - invalid or empty term
+
+### `GET /v1/glossary/requests`
+
+- Purpose: list the current authenticated user's glossary requests in the current workspace.
+- Caller: authenticated workspace member, admin, or owner with an active workspace membership.
+- Query params:
+  - `limit`
+  - `offset`
+- Response model: `GlossaryConceptRequestListResponse`
+- Important behavior:
+  - returns one item per requested concept candidate
+  - each item includes the concept summary, the latest matching request metadata for the current user, and that user's request count for the concept
+  - the route does not expose workspace-wide request intake
+- Important error states:
+  - no active workspace membership
+
 ### `GET /v1/glossary/validation-runs`
 
 - Purpose: list recent validation runs.
@@ -66,6 +112,9 @@ Canonical schema modules:
 - Purpose: create or refresh a working draft for a concept.
 - Caller: authenticated `owner` or `admin`.
 - Response shape: draft creation payload defined in `glossary.py`
+- Important behavior:
+  - when synced evidence exists, draft generation uses the support corpus
+  - when the concept came from a manual request and no evidence exists yet, the system creates a fallback draft seeded from the request metadata so admins can continue the review path
 
 ### `PATCH /v1/glossary/{concept_id}`
 

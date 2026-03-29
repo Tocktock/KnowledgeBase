@@ -1,11 +1,13 @@
-import { proxyJson, toNextJson } from '@/lib/api/proxy'
+import { NextRequest } from 'next/server'
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+import { getSessionToken, proxyJson, toNextJson } from '@/lib/api/proxy'
+
+export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params
-  const payload = await request.json()
   const response = await proxyJson(`/v1/glossary/${id}/draft`, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: await request.text(),
+    sessionToken: getSessionToken(request),
   })
   return toNextJson(response)
 }

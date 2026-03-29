@@ -13,6 +13,7 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
 
 - Frontend pages:
   - `/glossary`
+  - `/glossary/requests`
   - `/glossary/[slug]`
 - Backend public routes:
   - glossary read APIs under `/v1/glossary/*`
@@ -21,6 +22,9 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
 
 - `/glossary` is relabeled as Concepts in the main navigation.
 - The list page focuses on consumable approved concepts rather than the operational review queue.
+- `/glossary` links to a dedicated request page instead of embedding the intake form directly in the approved-concepts list.
+- Signed-in workspace members can submit a new concept request and review their own request history from `/glossary/requests` when the term does not exist yet.
+- Concept requests do not publish immediately. They create or update a suggested concept candidate that admins review in Knowledge QA.
 - Concept detail exposes:
   - lifecycle status where relevant to the view
   - support evidence
@@ -34,6 +38,10 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
 - Concept discovery:
   - browse or search approved concepts
   - open a concept detail page
+- Concept request intake:
+  - authenticated workspace members can propose a new term, aliases, and request context from the dedicated Concepts request page
+  - members can also see their own existing requests and the current concept lifecycle/validation state for each one
+  - the request is queued for admin review instead of bypassing the glossary approval workflow
 - Concept consumption:
   - read the canonical definition
   - inspect supporting evidence and related concepts
@@ -45,6 +53,7 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
 
 - Concepts are member-facing and readable without admin permissions.
 - The Concepts surface does not expose the full mutation and review toolset.
+- Request submission requires authentication plus an active workspace membership.
 - Validation state may influence what support context is shown, but the operational actions remain owned by the glossary-validation feature.
 
 ## Important contracts owned by this spec

@@ -19,8 +19,6 @@ import {
   formatTrustSourceLabel,
 } from '@/lib/utils'
 
-export const dynamic = 'force-dynamic'
-
 export default async function DocumentPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
 
@@ -37,7 +35,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
       <div className="space-y-6">
-        <Card className="overflow-hidden p-7 md:p-8">
+        <Card className="overflow-hidden p-6 md:p-8">
           <div className="mb-4 flex flex-wrap gap-2">
             <Badge className={data.document.doc_type === 'glossary' ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300' : ''}>
               {formatDocTypeLabel(data.document.doc_type)}
@@ -46,7 +44,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
             {data.document.owner_team ? <Badge>{formatOwnerTeamLabel(data.document.owner_team)}</Badge> : null}
             <Badge>{formatLanguageLabel(data.document.language_code)}</Badge>
           </div>
-          <h1 className="text-4xl font-semibold tracking-tight text-neutral-950 dark:text-neutral-50">{data.document.title}</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-neutral-950 md:text-4xl dark:text-neutral-50">{data.document.title}</h1>
           <div className="mt-4 flex flex-wrap gap-4 text-sm text-neutral-500 dark:text-neutral-400">
             <div className="inline-flex items-center gap-2"><FileText className="size-4" /> 문서 주소 /{data.document.slug}</div>
             <div className="inline-flex items-center gap-2"><Clock3 className="size-4" /> 업데이트 {formatDate(data.document.updated_at)}</div>
@@ -59,7 +57,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
           {data.document.source_url ? (
             <div className="mt-4 text-sm text-neutral-500">
               원본 링크:{' '}
-              <a className="text-blue-600 underline decoration-blue-200 underline-offset-4 dark:text-blue-400" href={data.document.source_url} target="_blank" rel="noreferrer">
+              <a className="break-all text-blue-600 underline decoration-blue-200 underline-offset-4 dark:text-blue-400" href={data.document.source_url} target="_blank" rel="noreferrer">
                 {data.document.source_url}
               </a>
             </div>
@@ -74,7 +72,7 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
       </div>
 
       <div className="space-y-4">
-        <Card className="sticky top-24 p-5">
+        <Card className="p-5 xl:sticky xl:top-24">
           <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">신뢰 정보</div>
           <div className="space-y-3 text-sm text-neutral-600 dark:text-neutral-400">
             <div className="rounded-2xl bg-neutral-50 px-3 py-3 dark:bg-neutral-900">

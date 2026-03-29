@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import math
 import re
 from hashlib import sha256
@@ -36,6 +37,11 @@ from app.schemas.glossary import (
     GlossaryConceptDetailResponse,
     GlossaryConceptDocumentLink,
     GlossaryConceptListResponse,
+    GlossaryConceptRequestCreateRequest,
+    GlossaryConceptRequestListEntry,
+    GlossaryConceptRequestListItem,
+    GlossaryConceptRequestListResponse,
+    GlossaryConceptRequestResponse,
     GlossaryConceptSummary,
     GlossaryConceptUpdateRequest,
     GlossaryDraftRequest,
@@ -114,6 +120,62 @@ class GlossaryError(RuntimeError):
 
 class GlossaryNotFoundError(GlossaryError):
     pass
+
+
+def _manual_request_entries(meta: dict[str, object] | None) -> list[dict[str, object]]:
+    if not isinstance(meta, dict):
+        return []
+    entries = meta.get("manual_requests")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _latest_manual_request(meta: dict[str, object] | None) -> dict[str, object] | None:
+    entries = _manual_request_entries(meta)
+    return entries[-1] if entries else None
+
+
+def _manual_request_entries_for_user(
+    meta: dict[str, object] | None,
+    *,
+    workspace_id: UUID,
+    requested_by_user_id: UUID,
+) -> list[dict[str, object]]:
+    workspace_key = str(workspace_id)
+    user_key = str(requested_by_user_id)
+    return [
+        entry
+        for entry in _manual_request_entries(meta)
+        if str(entry.get("workspace_id") or "") == workspace_key
+        and str(entry.get("requested_by_user_id") or "") == user_key
+    ]
+
+
+def _manual_request_reason(display_term: str, *, has_draft: bool = False, requester_name: str | None = None) -> str:
+    requester = requester_name or "구성원"
+    if has_draft:
+        return f"{display_term} 요청을 바탕으로 작업 초안을 만들었습니다. {requester} 요청 맥락을 검토한 뒤 승인 여부를 결정하세요."
+    return f"{display_term}는 {requester} 요청으로 등록된 신규 용어입니다. 초안을 만들고 승인 여부를 검토하세요."
+
+
+def _parse_request_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _manual_request_list_entry(entry: dict[str, object]) -> GlossaryConceptRequestListEntry:
+    return GlossaryConceptRequestListEntry(
+        requested_by_name=str(entry.get("requested_by_name") or "").strip() or None,
+        requested_by_email=str(entry.get("requested_by_email") or "").strip() or None,
+        request_note=str(entry.get("request_note") or "").strip() or None,
+        requested_at=_parse_request_datetime(entry.get("requested_at")),
+        owner_team_hint=str(entry.get("owner_team_hint") or "").strip() or None,
+    )
 
 
 def normalize_concept_term(value: str) -> str:
@@ -389,6 +451,190 @@ async def _get_concept_or_raise(session: AsyncSession, concept_id: UUID) -> Know
     if concept is None:
         raise GlossaryNotFoundError("Glossary concept not found")
     return concept
+
+
+async def _find_concept_by_exact_term(session: AsyncSession, term: str, aliases: list[str]) -> KnowledgeConcept | None:
+    requested_keys = {
+        concept_search_key(value)
+        for value in [term, *aliases]
+        if concept_search_key(value)
+    }
+    if not requested_keys:
+        return None
+    concepts = list((await session.execute(select(KnowledgeConcept))).scalars().all())
+    for concept in concepts:
+        if _concept_terms(concept).intersection(requested_keys):
+            return concept
+    return None
+
+
+async def create_glossary_concept_request(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    requested_by_user_id: UUID,
+    requested_by_name: str,
+    requested_by_email: str,
+    payload: GlossaryConceptRequestCreateRequest,
+) -> GlossaryConceptRequestResponse:
+    raw_display_term = normalize_whitespace(payload.term).strip()
+    normalized_term = normalize_concept_term(payload.term)
+    if not _is_valid_term(normalized_term):
+        raise GlossaryError("A valid glossary term is required.")
+
+    aliases: list[str] = []
+    seen_aliases: set[str] = set()
+    for value in [raw_display_term, normalized_term, *payload.aliases]:
+        alias = normalize_whitespace(value).strip()
+        alias_key = concept_search_key(alias)
+        if not alias or not alias_key or alias_key in seen_aliases:
+            continue
+        seen_aliases.add(alias_key)
+        aliases.append(alias)
+
+    existing = await _find_concept_by_exact_term(session, normalized_term, aliases)
+    if existing is not None and existing.status == ConceptStatus.approved.value:
+        docs_by_id = await _load_linked_documents(
+            session,
+            {doc_id for doc_id in [existing.generated_document_id, existing.canonical_document_id] if doc_id is not None},
+        )
+        return GlossaryConceptRequestResponse(
+            request_status="already_exists",
+            message="이미 승인된 핵심 개념입니다.",
+            concept=_concept_summary(existing, docs_by_id),
+        )
+
+    request_entry = {
+        "workspace_id": str(workspace_id),
+        "requested_by_user_id": str(requested_by_user_id),
+        "requested_by_name": requested_by_name,
+        "requested_by_email": requested_by_email,
+        "request_note": normalize_whitespace(payload.request_note or "").strip() or None,
+        "requested_at": utcnow().isoformat(),
+        "owner_team_hint": normalize_whitespace(payload.owner_team_hint or "").strip() or None,
+    }
+
+    if existing is not None:
+        meta = dict(existing.meta or {})
+        entries = _manual_request_entries(meta)
+        entries.append(request_entry)
+        meta["manual_requests"] = entries[-10:]
+        meta["manual_request_count"] = int(meta.get("manual_request_count") or 0) + 1
+        meta["manual_request_latest"] = request_entry
+        existing.meta = meta
+        if request_entry["owner_team_hint"] and not existing.owner_team_hint:
+            existing.owner_team_hint = str(request_entry["owner_team_hint"])
+        if existing.status in {ConceptStatus.ignored.value, ConceptStatus.stale.value}:
+            existing.status = ConceptStatus.suggested.value
+        if existing.generated_document_id is None and existing.status != ConceptStatus.approved.value:
+            existing.validation_state = GlossaryValidationState.new_term.value
+        existing.review_required = True
+        existing.validation_reason = _manual_request_reason(
+            existing.display_term,
+            requester_name=requested_by_name,
+        )
+        existing.last_validated_at = utcnow()
+        existing.updated_at = utcnow()
+        existing.refreshed_at = utcnow()
+        await session.commit()
+        return GlossaryConceptRequestResponse(
+            request_status="updated_existing",
+            message="이미 등록된 용어 후보에 요청을 추가했습니다. 관리자가 같은 항목에서 검토할 수 있습니다.",
+            concept=(await get_glossary_concept_detail(session, existing.id)).concept,
+        )
+
+    concept = KnowledgeConcept(
+        normalized_term=normalized_term,
+        display_term=raw_display_term or normalized_term,
+        aliases=aliases,
+        language_code="ko",
+        concept_type=classify_concept_type(raw_display_term or normalized_term),
+        confidence_score=0.0,
+        support_doc_count=0,
+        support_chunk_count=0,
+        status=ConceptStatus.suggested.value,
+        validation_state=GlossaryValidationState.new_term.value,
+        validation_reason=_manual_request_reason(raw_display_term or normalized_term, requester_name=requested_by_name),
+        evidence_signature=None,
+        last_validation_run_id=None,
+        last_validated_at=utcnow(),
+        review_required=True,
+        owner_team_hint=normalize_whitespace(payload.owner_team_hint or "").strip() or None,
+        source_system_mix=[],
+        meta={
+            "request_source": "manual_request",
+            "manual_request_count": 1,
+            "manual_request_latest": request_entry,
+            "manual_requests": [request_entry],
+        },
+        refreshed_at=utcnow(),
+    )
+    session.add(concept)
+    await session.flush()
+    await session.commit()
+    return GlossaryConceptRequestResponse(
+        request_status="created",
+        message="새 핵심 개념 요청을 등록했습니다. 관리자가 지식 검수에서 초안을 만들고 승인할 수 있습니다.",
+        concept=(await get_glossary_concept_detail(session, concept.id)).concept,
+    )
+
+
+async def list_glossary_concept_requests_for_user(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    requested_by_user_id: UUID,
+    limit: int = 20,
+    offset: int = 0,
+) -> GlossaryConceptRequestListResponse:
+    concepts = list((await session.execute(select(KnowledgeConcept))).scalars().all())
+    matched: list[tuple[KnowledgeConcept, list[dict[str, object]], dict[str, object], datetime | None]] = []
+
+    for concept in concepts:
+        entries = _manual_request_entries_for_user(
+            concept.meta or {},
+            workspace_id=workspace_id,
+            requested_by_user_id=requested_by_user_id,
+        )
+        if not entries:
+            continue
+        latest_request = entries[-1]
+        matched.append((concept, entries, latest_request, _parse_request_datetime(latest_request.get("requested_at"))))
+
+    matched.sort(
+        key=lambda row: (
+            row[3].timestamp() if row[3] is not None else 0.0,
+            row[0].updated_at.timestamp() if row[0].updated_at is not None else 0.0,
+        ),
+        reverse=True,
+    )
+
+    total = len(matched)
+    page = matched[offset : offset + limit]
+    linked_doc_ids = {
+        concept.generated_document_id
+        for concept, _, _, _ in page
+        if concept.generated_document_id is not None
+    } | {
+        concept.canonical_document_id
+        for concept, _, _, _ in page
+        if concept.canonical_document_id is not None
+    }
+    docs_by_id = await _load_linked_documents(session, {doc_id for doc_id in linked_doc_ids if doc_id is not None})
+
+    return GlossaryConceptRequestListResponse(
+        items=[
+            GlossaryConceptRequestListItem(
+                concept=_concept_summary(concept, docs_by_id),
+                latest_request=_manual_request_list_entry(latest_request),
+                request_count=len(entries),
+            )
+            for concept, entries, latest_request, _ in page
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 async def get_glossary_concept_detail(session: AsyncSession, concept_id: UUID) -> GlossaryConceptDetailResponse:
@@ -1268,15 +1514,51 @@ async def create_or_regenerate_glossary_draft(
     from app.services.ingest import ingest_document
 
     support_hits = await get_concept_support_hits(session, concept.id, limit=8)
-    if not support_hits:
+    manual_request = _latest_manual_request(concept.meta or {})
+    if support_hits:
+        markdown, references = await generate_definition_markdown_from_references(
+            topic=concept.display_term,
+            domain=payload.domain,
+            support_rows=support_hits,
+            allow_fallback=True,
+        )
+    elif manual_request is not None:
+        aliases = ", ".join(list(concept.aliases or [])[:6]) or "없음"
+        request_note = str(manual_request.get("request_note") or "").strip()
+        requester_name = str(manual_request.get("requested_by_name") or "구성원")
+        requester_email = str(manual_request.get("requested_by_email") or "").strip()
+        requested_at = str(manual_request.get("requested_at") or "")
+        requested_at_line = f"- Requested at: {requested_at}" if requested_at else None
+        requester_line = f"- Requested by: {requester_name} ({requester_email})" if requester_email else f"- Requested by: {requester_name}"
+        domain_label = payload.domain or concept.owner_team_hint or "General"
+        request_note_block = request_note or "No additional request note was provided."
+        markdown = "\n".join(
+            [
+                f"# {concept.display_term}",
+                "",
+                f"## Definition",
+                f"{concept.display_term} is a requested glossary concept for the {domain_label} domain. Update this draft with the canonical definition before approval.",
+                "",
+                "## How This Term Is Used Here",
+                request_note_block,
+                "",
+                "## Supporting Details",
+                "This draft was created from a manual glossary request and currently has no synced supporting evidence. Add references or supporting links before approval when available.",
+                "",
+                "## Request Context",
+                requester_line,
+                *( [requested_at_line] if requested_at_line else [] ),
+                f"- Aliases: {aliases}",
+                "",
+                "## Review Notes",
+                "- Confirm the term is valid for the current workspace.",
+                "- Refine the definition and examples.",
+                "- Link supporting documents once they are available.",
+            ]
+        )
+        references = []
+    else:
         raise GlossaryError("No supporting evidence is available for this concept.")
-
-    markdown, references = await generate_definition_markdown_from_references(
-        topic=concept.display_term,
-        domain=payload.domain,
-        support_rows=support_hits,
-        allow_fallback=True,
-    )
 
     draft_slug = f"glossary-{concept_slug(concept.display_term)}"
     draft_source_external_id = f"concept:{concept.id}:draft"
@@ -1308,6 +1590,20 @@ async def create_or_regenerate_glossary_draft(
     concept.generated_document_id = result.document.id
     if concept.status != ConceptStatus.approved.value:
         concept.status = ConceptStatus.drafted.value
+        concept.validation_state = GlossaryValidationState.needs_update.value
+        concept.review_required = True
+        concept.validation_reason = (
+            _manual_request_reason(
+                concept.display_term,
+                has_draft=True,
+                requester_name=str(manual_request.get("requested_by_name") or "구성원") if manual_request is not None else None,
+            )
+            if manual_request is not None and not support_hits
+            else _validation_reason(
+                state=GlossaryValidationState.needs_update.value,
+                display_term=concept.display_term,
+            )
+        )
     if concept.status == ConceptStatus.approved.value:
         concept.validation_state = GlossaryValidationState.stale_evidence.value
         concept.review_required = True
@@ -1315,6 +1611,7 @@ async def create_or_regenerate_glossary_draft(
             state=GlossaryValidationState.stale_evidence.value,
             display_term=concept.display_term,
         )
+    concept.last_validated_at = utcnow()
     concept.updated_at = utcnow()
     concept.refreshed_at = utcnow()
     if commit:

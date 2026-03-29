@@ -31,6 +31,7 @@ The product is framed as a workspace knowledge layer. Navigation and home behavi
   - Knowledge QA
   - Sync Status
 - `/new` stays available to authenticated users but is not part of default member navigation.
+- Sidebar navigation remains stable. Dense workflows may move into deep-link subpages without adding new main-nav items.
 
 ## Route labels
 
@@ -38,12 +39,19 @@ The product is framed as a workspace knowledge layer. Navigation and home behavi
 - `/glossary/review` is the admin-facing Knowledge QA surface.
 - `/jobs` is the admin-facing Sync Status surface.
 
+## Shared shell behavior
+
+- The global shell must keep navigation, recent documents, account controls, and theme controls visible without overlap across desktop and mobile widths.
+- Long names, emails, and document titles in the shell must truncate or wrap safely.
+- The mobile sidebar must be dismissible with an overlay and must not leave partially visible controls behind the drawer.
+
 ## Home behavior
 
 - Anonymous home explains the product as a workspace knowledge layer and routes users to `/login`.
 - Signed-in users without a workspace membership must not be rendered as anonymous visitors. Home shows a dedicated "workspace access required" state instead of the anonymous login CTA.
 - Member home prioritizes search, recommended knowledge, and trust signals.
 - Admin home includes the member value blocks plus setup and health summaries for sources, sync, and review workload.
+- Home CTA rows, summary cards, and side panels must wrap and restack before text clipping on tablet or mobile widths.
 
 ## Key workflows
 

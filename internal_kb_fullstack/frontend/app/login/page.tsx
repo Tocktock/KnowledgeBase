@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, Link2, LoaderCircle, Lock, ShieldCheck } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
+import { Suspense } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,16 @@ import type {
 } from '@/lib/types'
 import { formatDate } from '@/lib/utils'
 
+function normalizeAuthErrorMessage(message: string | null | undefined) {
+  if (!message) return '요청에 실패했습니다.'
+  if (message === 'Workspace invitation not found.') return '초대 링크를 찾을 수 없습니다.'
+  if (message === 'Password reset token not found.') return '비밀번호 재설정 링크를 찾을 수 없습니다.'
+  if (message === 'Password reset token has already been used.') return '이 비밀번호 재설정 링크는 이미 사용되었습니다.'
+  if (message === 'Password reset token has expired.') return '이 비밀번호 재설정 링크는 만료되었습니다.'
+  if (message === 'Password reset user not found.') return '비밀번호를 재설정할 계정을 찾을 수 없습니다.'
+  return message
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -28,7 +39,15 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   })
   const bodyText = await response.text()
   if (!response.ok) {
-    throw new Error(bodyText || '요청에 실패했습니다.')
+    if (bodyText) {
+      let parsedMessage: string | null = null
+      try {
+        const parsed = JSON.parse(bodyText) as { detail?: string; message?: string; error?: string }
+        parsedMessage = parsed.detail ?? parsed.message ?? parsed.error ?? null
+      } catch {}
+      throw new Error(normalizeAuthErrorMessage(parsedMessage ?? bodyText))
+    }
+    throw new Error('요청에 실패했습니다.')
   }
   return bodyText ? (JSON.parse(bodyText) as T) : (null as T)
 }
@@ -43,7 +62,7 @@ function authErrorMessage(value: string | null) {
   return null
 }
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const queryClient = useQueryClient()
@@ -74,6 +93,7 @@ export default function LoginPage() {
         `/api/workspace/invitations/${encodeURIComponent(inviteToken ?? '')}/preview`,
       ),
     enabled: Boolean(inviteToken),
+    retry: false,
   })
 
   const resetPreviewQuery = useQuery({
@@ -81,6 +101,7 @@ export default function LoginPage() {
     queryFn: () =>
       fetchJson<PasswordResetPreviewResponse>(`/api/auth/password/reset/${encodeURIComponent(resetToken ?? '')}`),
     enabled: Boolean(resetToken),
+    retry: false,
   })
 
   const googleHref = useMemo(() => {
@@ -331,12 +352,22 @@ export default function LoginPage() {
 	                : '이미 비밀번호가 설정된 초대 계정으로 로그인합니다. 비밀번호 재설정은 관리자 링크가 필요합니다.'}
 	          </div>
 
-          <div className="mt-5 space-y-4">
+          <form
+            className="mt-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleSubmit()
+            }}
+          >
+            <div className="space-y-4">
             {!inviteRequiresSignup && !inviteRequiresLogin && !resetMode ? (
               <label className="block space-y-2 text-sm">
                 <div className="font-medium text-neutral-700 dark:text-neutral-300">이메일</div>
                 <Input
+                  id="login-email"
+                  name="email"
                   type="email"
+                  autoComplete="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="you@example.com"
@@ -348,7 +379,13 @@ export default function LoginPage() {
             {inviteMode ? (
               <label className="block space-y-2 text-sm">
                 <div className="font-medium text-neutral-700 dark:text-neutral-300">초대된 이메일</div>
-                <Input value={invitePreview?.invited_email ?? ''} disabled />
+                <Input
+                  id="invite-email"
+                  name="invite_email"
+                  autoComplete="email"
+                  value={invitePreview?.invited_email ?? ''}
+                  disabled
+                />
               </label>
             ) : null}
 
@@ -356,6 +393,9 @@ export default function LoginPage() {
               <label className="block space-y-2 text-sm">
                 <div className="font-medium text-neutral-700 dark:text-neutral-300">이름</div>
                 <Input
+                  id="signup-name"
+                  name="name"
+                  autoComplete="name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="표시 이름"
@@ -369,7 +409,10 @@ export default function LoginPage() {
                 {resetMode ? '새 비밀번호' : '비밀번호'}
               </div>
               <Input
+                id="login-password"
+                name="password"
                 type="password"
+                autoComplete={resetMode ? 'new-password' : inviteRequiresSignup ? 'new-password' : 'current-password'}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="8자 이상"
@@ -381,7 +424,10 @@ export default function LoginPage() {
               <label className="block space-y-2 text-sm">
                 <div className="font-medium text-neutral-700 dark:text-neutral-300">비밀번호 확인</div>
                 <Input
+                  id="login-password-confirm"
+                  name="password_confirm"
                   type="password"
+                  autoComplete="new-password"
                   value={passwordConfirm}
                   onChange={(event) => setPasswordConfirm(event.target.value)}
                   placeholder="비밀번호를 다시 입력"
@@ -389,17 +435,18 @@ export default function LoginPage() {
                 />
               </label>
             ) : null}
-          </div>
+            </div>
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button disabled={busy || previewLoading} onClick={() => void handleSubmit()}>
-              {busy ? <LoaderCircle className="size-4 animate-spin" /> : null}
-              {resetMode ? '비밀번호 저장' : inviteRequiresSignup ? '계정 만들기' : '비밀번호 로그인'}
-            </Button>
-            <Button variant="outline" onClick={() => router.push('/connectors')} disabled={busy}>
-              연결 소스로 돌아가기
-            </Button>
-          </div>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button type="submit" disabled={busy || previewLoading}>
+                {busy ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                {resetMode ? '비밀번호 저장' : inviteRequiresSignup ? '계정 만들기' : '비밀번호 로그인'}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => router.push('/connectors')} disabled={busy}>
+                연결 소스로 돌아가기
+              </Button>
+            </div>
+          </form>
 
           <div className="mt-4 text-sm text-neutral-500">
             비밀번호를 잊었으면 워크스페이스 관리자에게 재설정 링크를 요청하세요.
@@ -407,5 +454,23 @@ export default function LoginPage() {
         </Card>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto flex min-h-[70vh] w-full max-w-5xl items-center justify-center">
+          <Card className="w-full max-w-xl p-6 text-sm text-neutral-500 dark:text-neutral-400">
+            <div className="flex items-center gap-2">
+              <LoaderCircle className="size-4 animate-spin" /> 로그인 화면을 준비하는 중입니다.
+            </div>
+          </Card>
+        </div>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   )
 }

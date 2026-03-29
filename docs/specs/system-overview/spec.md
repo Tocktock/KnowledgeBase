@@ -73,6 +73,14 @@ Shared user-facing trust fields:
 
 The trust model must be consistent across Search, Docs, and Concepts.
 
+## Frontend rendering contract
+
+- The root frontend layout must stay a stable shell. Request-time data fetching belongs in leaf pages or client queries, not in the global layout.
+- Long user-visible strings such as names, emails, slugs, URLs, badges, and source titles must truncate or wrap without overflowing cards, nav items, or action rows.
+- Dense operator surfaces must collapse fixed multi-column layouts before tablet/mobile widths. Search forms, review filters, connector selectors, and editor sidebars must stack cleanly instead of clipping.
+- `force-dynamic` is not the default rendering mode. A route should only opt into an explicit dynamic boundary when request-time behavior cannot be expressed through a narrower server or client fetch.
+- When one surface becomes operationally dense, the preferred IA pattern is a stable overview route plus deep-link detail or setup routes rather than adding more top-level navigation items.
+
 ## Feature ownership map
 
 - [`workspace-auth`](../workspace-auth/spec.md)

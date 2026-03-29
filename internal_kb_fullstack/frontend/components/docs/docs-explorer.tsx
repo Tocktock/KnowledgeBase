@@ -108,15 +108,15 @@ export function DocsExplorer({ preset }: DocsExplorerProps) {
               </Card>
             ))
           : data?.items.map((item) => (
-              <Link key={item.id} href={`/docs/${item.slug}`}>
+              <Link key={item.id} href={`/docs/${item.slug}`} className="block min-w-0">
                 <Card className="group h-full p-5 transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:hover:border-blue-900">
                   <div className="mb-3 flex items-start justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <div className="mb-1 flex items-center gap-2 text-lg font-semibold text-neutral-950 dark:text-neutral-50">
-                        <BookCopy className="size-4 text-blue-500" />
-                        <span className="line-clamp-1">{item.title}</span>
+                        <BookCopy className="size-4 shrink-0 text-blue-500" />
+                        <span className="line-clamp-2 break-words">{item.title}</span>
                       </div>
-                      <div className="text-xs text-neutral-400">/{item.slug}</div>
+                      <div className="line-clamp-1 text-xs text-neutral-400">/{item.slug}</div>
                     </div>
                     <Badge>{formatDocTypeLabel(item.doc_type)}</Badge>
                   </div>

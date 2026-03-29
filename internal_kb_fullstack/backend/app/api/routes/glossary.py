@@ -12,6 +12,9 @@ from app.db.models import GlossaryJob, GlossaryJobKind, GlossaryJobScope, JobSta
 from app.schemas.glossary import (
     GlossaryConceptDetailResponse,
     GlossaryConceptListResponse,
+    GlossaryConceptRequestCreateRequest,
+    GlossaryConceptRequestListResponse,
+    GlossaryConceptRequestResponse,
     GlossaryConceptUpdateRequest,
     GlossaryDraftRequest,
     GlossaryRefreshRequest,
@@ -24,12 +27,14 @@ from app.services.auth import AuthenticatedUser
 from app.services.glossary import (
     GlossaryError,
     GlossaryNotFoundError,
+    create_glossary_concept_request,
     create_glossary_validation_run,
     create_or_regenerate_glossary_draft,
     enqueue_glossary_refresh_job,
     get_glossary_validation_run,
     get_glossary_concept_by_slug,
     get_glossary_concept_detail,
+    list_glossary_concept_requests_for_user,
     list_glossary_validation_runs,
     list_glossary_concepts,
     update_glossary_concept,
@@ -114,6 +119,45 @@ async def get_glossary_validation_run_route(
         )
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/requests", response_model=GlossaryConceptRequestResponse)
+async def create_glossary_request_route(
+    payload: GlossaryConceptRequestCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> GlossaryConceptRequestResponse:
+    if auth_user.current_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Glossary requests require an active workspace membership.")
+    try:
+        return await create_glossary_concept_request(
+            session,
+            workspace_id=auth_user.current_workspace_id,
+            requested_by_user_id=auth_user.user.id,
+            requested_by_name=auth_user.user.name,
+            requested_by_email=auth_user.user.email,
+            payload=payload,
+        )
+    except GlossaryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/requests", response_model=GlossaryConceptRequestListResponse)
+async def list_glossary_requests_route(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
+) -> GlossaryConceptRequestListResponse:
+    if auth_user.current_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Glossary requests require an active workspace membership.")
+    return await list_glossary_concept_requests_for_user(
+        session,
+        workspace_id=auth_user.current_workspace_id,
+        requested_by_user_id=auth_user.user.id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("", response_model=GlossaryConceptListResponse)

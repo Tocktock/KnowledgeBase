@@ -1,7 +1,5 @@
 import { SemanticSearchPage } from '@/components/search/semantic-search-page'
 
-export const dynamic = 'force-dynamic'
-
 export default function SearchPage() {
   return (
     <div className="space-y-4">

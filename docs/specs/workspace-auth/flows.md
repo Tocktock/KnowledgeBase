@@ -19,6 +19,7 @@
 4. If the user is anonymous, the frontend redirects to `/login?invite_token=...`.
 5. The user completes `POST /v1/auth/password/invite-signup`.
 6. The backend validates the invite, creates or updates the user password, creates the session, accepts the invite, and returns a redirect target.
+7. If the invite token is invalid or missing, `/login` shows a normalized request error message instead of exposing a raw JSON backend payload.
 
 ## Admin-generated password reset
 
@@ -26,6 +27,7 @@
 2. The link is copied and delivered outside the product.
 3. The recipient opens `/login?reset_token=...` or the direct reset preview route.
 4. The backend previews the token, accepts the new password, and returns a fresh session.
+5. If the reset token is invalid, expired, or already used, `/login` shows a user-facing error message on the same page.
 
 ## Role propagation
 
