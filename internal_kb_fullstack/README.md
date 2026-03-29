@@ -1,7 +1,13 @@
 # Internal KB Fullstack
 
-워크스페이스 팀이 이미 쓰고 있는 Google Drive, Notion, 내부 문서를 하나의 검색 가능한 지식 레이어로 묶는 제품입니다.
-관리자는 데이터 소스를 한 번 연결하고, 구성원은 검색·문서 탐색·핵심 개념 화면에서 바로 최신 정보를 소비합니다.
+워크스페이스 팀이 이미 쓰고 있는 Google Drive, GitHub, Notion, 내부 문서를 하나의 검색 가능한 지식 레이어로 묶는 애플리케이션입니다.
+
+제품 기능의 정식 SoT는 저장소 루트의 문서를 사용합니다.
+
+- `../docs/README.md`
+- `../docs/specs/`
+- `../docs/decisions/`
+- `../docs/memories/`
 
 ## 구성
 
@@ -9,23 +15,17 @@
 - `frontend/`: Next.js 16, React 19, Tailwind CSS 4, TanStack Query, Tiptap 3
 - `docker-compose.yml`: Postgres / migrate / api / worker / web
 
-## Product thesis
+## Canonical specs
 
-- **Workspace knowledge layer**: 외부 팀 지식을 동기화해 워크스페이스 공용 컨텍스트로 만듭니다.
-- **Sync-first**: Google Drive, Notion, 직접 작성 문서를 같은 저장소로 가져와 검색·문서·핵심 개념에 반영합니다.
-- **Trust-first**: 검색 결과와 문서 상세에서 출처, 최신성, 근거 수를 함께 보여 줍니다.
-- **Admin connects once, members benefit immediately**: 관리자는 데이터 소스를 관리하고, 일반 구성원은 운영 화면을 몰라도 가치를 얻습니다.
-
-## Main surfaces
-
-- `/` 역할 기반 홈
-- `/search` 워크스페이스 검색
-- `/docs` 문서 탐색
-- `/glossary` 핵심 개념
-- `/connectors` 데이터 소스 설정
-- `/jobs` 동기화 상태
-- `/glossary/review` 지식 검수
-- `/login` 단일 로그인 진입점
+- 제품 개요: `../docs/specs/system-overview/spec.md`
+- 워크스페이스 인증: `../docs/specs/workspace-auth/spec.md`
+- 홈/내비게이션/운영 화면: `../docs/specs/home-navigation-admin/spec.md`
+- 데이터 소스 연결: `../docs/specs/connectors/spec.md`
+- 검색과 문서 탐색: `../docs/specs/search-and-docs/spec.md`
+- 문서 작성: `../docs/specs/document-authoring/spec.md`
+- 핵심 개념: `../docs/specs/concepts/spec.md`
+- 용어집 검증: `../docs/specs/glossary-validation/spec.md`
+- 동기화 상태: `../docs/specs/sync-status/spec.md`
 
 ## 실행
 
@@ -41,17 +41,14 @@ docker compose up --build
 - 프론트엔드: `http://localhost:3000`
 - 백엔드 OpenAPI: `http://localhost:8000/docs`
 
-## 구현 메모
+## Runtime notes
 
-프론트엔드는 브라우저에서 직접 FastAPI를 치지 않고, Next.js Route Handlers(`/app/api/...`)가 백엔드로 프록시합니다. 그래서 브라우저 CORS 설정 없이 로컬 Compose 환경에서 바로 연결됩니다.
+프론트엔드는 브라우저에서 직접 FastAPI를 치지 않고, Next.js Route Handlers(`/app/api/...`)가 백엔드로 프록시합니다. 제품 동작과 공용 계약은 이 README가 아니라 루트 `docs/specs/`를 기준으로 봐야 합니다.
 
-문서 작성은 Markdown 기반이며, Tiptap의 Markdown extension을 사용해 시각 편집 모드와 소스 모드를 전환합니다. 다만 기본 제품 흐름은 “새 문서 작성”보다 “연결된 소스를 소비 가능한 지식 레이어로 만들기”에 맞춰져 있습니다.
+## Decision records and memory
 
-
-## Decision records
-
-- `docs/decisions/`: architectural decisions and project memory
-
+- `../docs/decisions/`
+- `../docs/memories/`
 
 ## Useful commands
 

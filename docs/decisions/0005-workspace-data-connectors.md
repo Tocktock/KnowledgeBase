@@ -62,18 +62,19 @@ The product also currently assumes a single deployment-level admin model. That b
   - default sync policy
   - health state
   - share requirements
-- Initial providers are `google_drive` and `notion`.
+- Initial providers are `google_drive`, `github`, and `notion`.
 - The model must be able to add future providers without changing the top-level UX structure.
 
 ### Source selection UX
 - Google Drive uses a native picker or a Drive-like browser. Manual identifier entry is not part of the default UI.
+- GitHub uses repository search and a fixed `repository_docs` template that syncs README and `docs/` content only.
 - Notion uses search plus recent items and must clearly warn that only pages or databases shared with the integration are visible.
 - Advanced selection remains admin-only and collapsed by default.
 
 ### Document ingestion
 - Connectors stay sync-first.
 - Synced items flow into the existing document store and reuse the current `/docs`, search, and glossary pipelines.
-- User-facing surfaces show only source labels such as `Google Drive` or `Notion`, not internal connector structure.
+- User-facing surfaces show only source labels such as `Google Drive`, `GitHub`, or `Notion`, not internal connector structure.
 
 ## Public interface direction
 - Sessions expose `current_workspace_id`.

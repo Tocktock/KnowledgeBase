@@ -1,5 +1,7 @@
 # Architecture
 
+This file is an architecture summary only. Canonical feature behavior lives in the repository root specs under `../../../docs/specs/`.
+
 ## Runtime components
 
 - `postgres`: source of truth and job queue

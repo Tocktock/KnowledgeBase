@@ -1,6 +1,8 @@
 # Decisions and Project Memory
 
-This folder stores architectural decisions and durable project memory.
+This folder stores architectural decisions and durable technical memory.
+
+Feature behavior now lives in [`../specs/`](../specs/), and traceability history now lives in [`../memories/`](../memories/).
 
 ## Current decisions
 
@@ -16,3 +18,4 @@ This folder stores architectural decisions and durable project memory.
 - Add a new numbered file for any lasting architectural choice.
 - Update `project-memory.md` when an invariant or operational rule changes.
 - Prefer writing down *why* a rule exists, not just *what* it is.
+- Do not use this folder as the canonical home for feature behavior. Put feature behavior in `docs/specs/` instead.
