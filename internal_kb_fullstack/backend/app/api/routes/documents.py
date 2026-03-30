@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_authenticated_user, get_optional_authenticated_user
 from app.db.engine import get_db_session
 from app.db.models import Document, DocumentRevision, EmbeddingJob
 from app.schemas.documents import (
@@ -35,10 +36,18 @@ from app.services.document_drafts import (
 from app.services.ingest import SlugConflictError, ingest_document
 from app.services.jobs import request_document_reindex
 from app.services.parser import DocumentParser
+from app.services.auth import AuthenticatedUser
 from app.services.trust import build_document_trust
 from app.services.wiki_graph import extract_heading_items, extract_internal_slugs, get_document_relations
+from app.services.workspace import resolve_read_workspace_id
 
 router = APIRouter(prefix="/v1/documents", tags=["documents"])
+
+
+def _require_authoring_workspace(auth_user: AuthenticatedUser) -> UUID:
+    if auth_user.current_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Document authoring requires an active workspace membership.")
+    return auth_user.current_workspace_id
 
 
 
@@ -127,9 +136,12 @@ async def list_documents_route(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentListResponse:
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
     rows, total = await list_documents(
         session,
+        workspace_id=workspace_id,
         q=q,
         owner_team=owner_team,
         doc_types=doc_type,
@@ -145,9 +157,11 @@ async def list_documents_route(
 async def ingest_document_route(
     payload: IngestDocumentRequest,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> IngestDocumentResponse:
+    workspace_id = _require_authoring_workspace(auth_user)
     try:
-        result = await ingest_document(session, payload)
+        result = await ingest_document(session, payload, workspace_id=workspace_id)
     except SlugConflictError as exc:
         raise HTTPException(status_code=409, detail=_slug_conflict_detail(exc.document)) from exc
     return IngestDocumentResponse(
@@ -173,7 +187,9 @@ async def upload_document_route(
     status_value: str = Form(default="published", alias="status"),
     visibility_scope: str = Form(default="member_visible"),
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> IngestDocumentResponse:
+    workspace_id = _require_authoring_workspace(auth_user)
     parser = DocumentParser()
     content_type = parser.infer_content_type(file.filename or "uploaded.txt")
     content = (await file.read()).decode("utf-8", errors="ignore")
@@ -192,7 +208,7 @@ async def upload_document_route(
         status=status_value,  # type: ignore[arg-type]
         visibility_scope=visibility_scope,  # type: ignore[arg-type]
     )
-    result = await ingest_document(session, payload)
+    result = await ingest_document(session, payload, workspace_id=workspace_id)
     return IngestDocumentResponse(
         document=_document_summary(result.document),
         revision=_revision_summary(result.revision),
@@ -205,7 +221,9 @@ async def upload_document_route(
 async def generate_definition_route(
     payload: GenerateDefinitionDraftRequest,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> GenerateDefinitionDraftResponse:
+    _require_authoring_workspace(auth_user)
     try:
         return await generate_definition_draft(session, payload)
     except DefinitionDraftNotFoundError as exc:
@@ -220,12 +238,14 @@ async def generate_definition_route(
 async def get_document_by_slug_route(
     slug: str,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentViewResponse:
-    document, revision = await get_document_by_slug(session, slug=slug)
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
+    document, revision = await get_document_by_slug(session, slug=slug, workspace_id=workspace_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    _doc, _rev, chunks = await get_document_detail(session, document.id)
+    _doc, _rev, chunks = await get_document_detail(session, document.id, workspace_id=workspace_id)
     content_markdown = revision.content_markdown if revision is not None else None
     content_text = revision.content_text if revision is not None else None
     return DocumentViewResponse(
@@ -243,8 +263,10 @@ async def get_document_by_slug_route(
 async def get_document_route(
     document_id: UUID,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentDetailResponse:
-    document, revision, chunks = await get_document_detail(session, document_id)
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
+    document, revision, chunks = await get_document_detail(session, document_id, workspace_id=workspace_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -259,8 +281,10 @@ async def get_document_route(
 async def get_document_content_route(
     document_id: UUID,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentContentResponse:
-    document, revision, _chunks = await get_document_detail(session, document_id)
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
+    document, revision, _chunks = await get_document_detail(session, document_id, workspace_id=workspace_id)
     if document is None or revision is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentContentResponse(
@@ -276,8 +300,10 @@ async def get_document_relations_route(
     document_id: UUID,
     limit: int = Query(default=8, ge=1, le=20),
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentRelationsResponse:
-    relations = await get_document_relations(session, document_id=document_id, limit=limit)
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
+    relations = await get_document_relations(session, document_id=document_id, workspace_id=workspace_id, limit=limit)
     return DocumentRelationsResponse(
         outgoing=[_relation_item(item) for item in relations["outgoing"]],
         backlinks=[_relation_item(item) for item in relations["backlinks"]],
@@ -290,8 +316,10 @@ async def reindex_document_route(
     document_id: UUID,
     priority: int = 100,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> JobSummary:
-    job = await request_document_reindex(session, document_id=document_id, priority=priority)
+    workspace_id = _require_authoring_workspace(auth_user)
+    job = await request_document_reindex(session, document_id=document_id, workspace_id=workspace_id, priority=priority)
     if job is None:
         raise HTTPException(status_code=404, detail="Document not found or has no current revision")
     return JobSummary.model_validate(job)

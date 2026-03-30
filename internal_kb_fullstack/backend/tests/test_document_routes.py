@@ -47,6 +47,7 @@ async def test_list_documents_route_accepts_single_doc_type(monkeypatch: pytest.
     async def fake_list_documents(
         _session: object,
         *,
+        workspace_id: object = None,
         q: str | None = None,
         owner_team: str | None = None,
         doc_types: list[str] | None = None,
@@ -60,6 +61,7 @@ async def test_list_documents_route_accepts_single_doc_type(monkeypatch: pytest.
                 "owner_team": owner_team,
                 "doc_types": doc_types,
                 "status": status,
+                "workspace_id": workspace_id,
                 "limit": limit,
                 "offset": offset,
             }
@@ -67,6 +69,10 @@ async def test_list_documents_route_accepts_single_doc_type(monkeypatch: pytest.
         return [make_document_row(doc_type=doc_types[0] if doc_types else "knowledge")], 1
 
     monkeypatch.setattr(documents_route, "list_documents", fake_list_documents)
+    async def fake_resolve_read_workspace_id(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(documents_route, "resolve_read_workspace_id", fake_resolve_read_workspace_id)
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
@@ -76,6 +82,7 @@ async def test_list_documents_route_accepts_single_doc_type(monkeypatch: pytest.
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
+    assert captured["workspace_id"] is None
     assert captured["doc_types"] == ["knowledge"]
     assert response.json()["items"][0]["doc_type"] == "knowledge"
 
@@ -90,6 +97,7 @@ async def test_list_documents_route_accepts_multiple_doc_types(monkeypatch: pyte
     async def fake_list_documents(
         _session: object,
         *,
+        workspace_id: object = None,
         q: str | None = None,
         owner_team: str | None = None,
         doc_types: list[str] | None = None,
@@ -103,6 +111,7 @@ async def test_list_documents_route_accepts_multiple_doc_types(monkeypatch: pyte
                 "owner_team": owner_team,
                 "doc_types": doc_types,
                 "status": status,
+                "workspace_id": workspace_id,
                 "limit": limit,
                 "offset": offset,
             }
@@ -110,6 +119,10 @@ async def test_list_documents_route_accepts_multiple_doc_types(monkeypatch: pyte
         return [make_document_row(doc_type="runbook"), make_document_row(doc_type="spec")], 2
 
     monkeypatch.setattr(documents_route, "list_documents", fake_list_documents)
+    async def fake_resolve_read_workspace_id(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(documents_route, "resolve_read_workspace_id", fake_resolve_read_workspace_id)
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
@@ -122,6 +135,7 @@ async def test_list_documents_route_accepts_multiple_doc_types(monkeypatch: pyte
     app.dependency_overrides.clear()
 
     assert response.status_code == 200
+    assert captured["workspace_id"] is None
     assert captured["doc_types"] == ["runbook", "spec"]
     assert captured["limit"] == 40
     assert [item["doc_type"] for item in response.json()["items"]] == ["runbook", "spec"]

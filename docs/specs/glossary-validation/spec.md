@@ -2,7 +2,7 @@
 
 ## Summary
 
-The glossary definition workflow is the primary authoritative output of the product. Workspace sync must end in glossary validation so admins can determine whether a term definition remains correct, needs revision, or needs new supporting evidence.
+The glossary definition workflow is the primary authoritative output of the product. Workspace sync must end in glossary validation so admins can determine whether a term definition remains correct, needs revision, or needs new supporting evidence. Approval is hard-gated by a workspace-scoped verification policy rather than by draft existence alone.
 
 ## Primary users
 
@@ -20,7 +20,7 @@ The glossary definition workflow is the primary authoritative output of the prod
 ## Current behavior
 
 - Glossary lifecycle status remains separate from validation state.
-- Lifecycle statuses include `suggested`, `drafted`, `approved`, `ignored`, and `stale`.
+- Lifecycle statuses include `suggested`, `drafted`, `approved`, `ignored`, `stale`, and `archived`.
 - Validation states include `ok`, `needs_update`, `missing_draft`, `stale_evidence`, and `new_term`.
 - Validation metadata includes:
   - `last_validated_at`
@@ -28,10 +28,37 @@ The glossary definition workflow is the primary authoritative output of the prod
   - `evidence_signature`
   - `last_validation_run_id`
   - `review_required`
+- Verification is a separate policy-driven layer.
+- Every non-archived concept belongs to one workspace and one verification policy.
+- Verification metadata includes:
+  - `verification_state`
+  - `verification_reason`
+  - `verified_at`
+  - `verification_due_at`
+  - `last_checked_at`
+  - `verified_by_user_id`
+  - `verification_policy_version`
+  - `evidence_bundle_hash`
 - Approved glossary pages stay published even when evidence drifts.
 - When evidence drifts, the approved page remains visible, validation moves to `stale_evidence`, and a working draft is created or refreshed for review.
 - New terms discovered by sync enter the queue as suggested content and are not auto-approved.
 - Manual requests from signed-in workspace members also enter the queue as suggested content and are not auto-approved.
+- Request-only or weakly grounded concepts remain `verification_state = evidence_insufficient` until the workspace policy is satisfied.
+
+## Verification policy
+
+- M1 ships one default policy per workspace.
+- Default policy fields are:
+  - `min_support_docs`
+  - `freshness_sla_days`
+  - `min_durable_sources`
+  - `allow_evidence_only_support`
+  - `continuous_revalidation_enabled`
+- Approval requires:
+  - a canonical glossary document
+  - current satisfaction of the assigned verification policy
+- Archived concepts are excluded from continuous revalidation and from default member-facing glossary lists.
+- Drifted approved concepts remain readable, leave the `verified` state, set `review_required = true`, and refresh a working draft automatically when possible.
 
 ## Validation run modes
 
@@ -76,17 +103,21 @@ Workspace-wide runs operate on active connected sources in the current workspace
 - Review detail must show:
   - lifecycle status
   - validation state
+  - verification state and policy label
   - why the term was flagged
   - support source mix
   - current approved document
   - working draft when present
   - last validation time
+  - verification due time and last checked time
+  - knowledge passport details for provenance, evidence, and backlinks
 
 ## Permissions and visibility
 
 - Knowledge QA is admin-only.
 - Members can consume approved concepts, but they do not operate validation runs or glossary mutations.
 - Review-required status and evidence drift are operational data points exposed through the admin workflow.
+- Approval failures caused by verification policy must return machine-readable reasons so the review UI can explain what is missing.
 
 ## Important contracts owned by this spec
 
@@ -95,6 +126,7 @@ Workspace-wide runs operate on active connected sources in the current workspace
 - glossary draft generation contract
 - glossary mutation contract
 - validation-state and run-summary shapes embedded in glossary responses
+- verification summary shape embedded in glossary list/detail, review, and workspace overview responses
 
 ## Constraints and non-goals
 

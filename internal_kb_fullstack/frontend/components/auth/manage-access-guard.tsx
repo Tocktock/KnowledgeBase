@@ -18,6 +18,50 @@ async function fetchAuthMe() {
   return (await response.json()) as AuthMeResponse
 }
 
+function LoginRequiredCard({ title, description, pathname }: { title: string; description: string; pathname: string }) {
+  return (
+    <Card className="p-6">
+      <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+        <Lock className="size-4 text-blue-500" /> {title}
+      </div>
+      <p className="mt-3 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+        {description}
+      </p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={() => window.location.assign(`/login?return_to=${encodeURIComponent(pathname)}`)}>
+          로그인하기
+        </Button>
+        <Button variant="outline" onClick={() => window.location.assign('/search')}>
+          워크스페이스 검색으로 이동
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+function WorkspaceRequiredCard({ title }: { title: string }) {
+  return (
+    <Card className="p-6">
+      <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
+        <ShieldCheck className="size-4 text-blue-500" /> 워크스페이스 초대 필요
+      </div>
+      <p className="mt-3 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
+        {title}는 활성 워크스페이스 멤버십이 있어야 사용할 수 있습니다. 초대 링크를 수락하면 작성과 검수 기능이 같은 워크스페이스 기준으로 열립니다.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Badge>쓰기 권한 필요</Badge>
+        <Badge>워크스페이스 컨텍스트 필요</Badge>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={() => window.location.assign('/search')}>초대 상태 확인</Button>
+        <Button variant="outline" onClick={() => window.location.assign('/search')}>
+          워크스페이스 검색
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 export function ManageAccessGuard({
   title,
   description,
@@ -53,24 +97,7 @@ export function ManageAccessGuard({
   const user = authQuery.data?.user ?? null
 
   if (!authenticated || !user) {
-    return (
-      <Card className="p-6">
-        <div className="flex items-center gap-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">
-          <Lock className="size-4 text-blue-500" /> {title}
-        </div>
-        <p className="mt-3 text-sm leading-7 text-neutral-500 dark:text-neutral-400">
-          {description}
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button onClick={() => window.location.assign(`/login?return_to=${encodeURIComponent(pathname)}`)}>
-            로그인하기
-          </Button>
-          <Button variant="outline" onClick={() => window.location.assign('/search')}>
-            워크스페이스 검색으로 이동
-          </Button>
-        </div>
-      </Card>
-    )
+    return <LoginRequiredCard title={title} description={description} pathname={pathname} />
   }
 
   if (!user.can_manage_workspace_connectors) {
@@ -95,6 +122,51 @@ export function ManageAccessGuard({
         </div>
       </Card>
     )
+  }
+
+  return <>{children}</>
+}
+
+export function WorkspaceMemberGuard({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description: string
+  children: ReactNode
+}) {
+  const pathname = usePathname()
+  const authQuery = useQuery({
+    queryKey: ['auth-me', 'workspace-member'],
+    queryFn: fetchAuthMe,
+  })
+
+  if (authQuery.isLoading) {
+    return (
+      <Card className="p-6 text-sm text-neutral-500">
+        {title} 접근 권한을 확인하는 중입니다.
+      </Card>
+    )
+  }
+
+  if (authQuery.isError) {
+    return (
+      <Card className="p-6 text-sm text-red-600 dark:text-red-400">
+        {authQuery.error instanceof Error ? authQuery.error.message : '접근 권한을 확인하지 못했습니다.'}
+      </Card>
+    )
+  }
+
+  const authenticated = authQuery.data?.authenticated === true
+  const user = authQuery.data?.user ?? null
+
+  if (!authenticated || !user) {
+    return <LoginRequiredCard title={title} description={description} pathname={pathname} />
+  }
+
+  if (!user.current_workspace) {
+    return <WorkspaceRequiredCard title={title} />
   }
 
   return <>{children}</>

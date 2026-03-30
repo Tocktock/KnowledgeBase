@@ -47,6 +47,7 @@ Canonical schema modules:
 - Important behavior:
   - exact or high-confidence concept grounding may influence result framing
   - evidence-only documents are filtered from default result hits
+  - result ranking, concept grounding, and canonical glossary promotion are all scoped to the resolved workspace
 - Example request:
 
 ```json
@@ -73,6 +74,7 @@ Canonical schema modules:
 - Response model: `DocumentListResponse`
 - Important behavior:
   - default listing excludes `evidence_only` documents
+  - listing is scoped to the resolved workspace
 
 ### `GET /v1/documents/slug/{slug}`
 
@@ -82,6 +84,7 @@ Canonical schema modules:
 - Important error states:
   - unknown slug
   - filtered or inaccessible document
+  - slug exists in another workspace only
 
 ### `GET /v1/documents/{document_id}`
 
@@ -100,6 +103,8 @@ Canonical schema modules:
 - Purpose: fetch outgoing links, backlinks, and related concepts for a document.
 - Caller: anonymous or authenticated user.
 - Response model: `DocumentRelationsResponse`
+- Important behavior:
+  - outgoing links, backlinks, and related documents are scoped to the same resolved workspace as the document detail page
 
 ## Shared trust contract
 

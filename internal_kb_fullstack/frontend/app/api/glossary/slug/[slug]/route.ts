@@ -1,7 +1,11 @@
-import { proxyJson, toNextJson } from '@/lib/api/proxy'
+import { NextRequest } from 'next/server'
 
-export async function GET(_request: Request, context: { params: Promise<{ slug: string }> }) {
+import { getSessionToken, proxyJson, toNextJson } from '@/lib/api/proxy'
+
+export async function GET(request: NextRequest, context: { params: Promise<{ slug: string }> }) {
   const { slug } = await context.params
-  const response = await proxyJson(`/v1/glossary/slug/${encodeURIComponent(slug)}`)
+  const response = await proxyJson(`/v1/glossary/slug/${encodeURIComponent(slug)}`, {
+    sessionToken: getSessionToken(request),
+  })
   return toNextJson(response)
 }

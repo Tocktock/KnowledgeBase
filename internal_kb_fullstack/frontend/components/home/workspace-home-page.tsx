@@ -24,6 +24,8 @@ import {
   formatConceptTypeLabel,
   formatDate,
   formatDocTypeLabel,
+  formatVerificationStateLabel,
+  getVerificationStateBadgeClass,
   sentence,
 } from '@/lib/utils'
 
@@ -216,6 +218,14 @@ export function WorkspaceHomePage() {
               <div className="mt-2 text-sm text-neutral-500">
                 지금 검토가 필요한 용어 {overview.review_required_count}개
               </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {Object.entries(overview.verification_counts).map(([state, count]) => (
+                  <Badge key={state} className={getVerificationStateBadgeClass(state)}>
+                    {formatVerificationStateLabel(state)} {count}
+                  </Badge>
+                ))}
+                {Object.keys(overview.verification_counts).length === 0 ? <Badge>검증 집계 없음</Badge> : null}
+              </div>
               <div className="mt-2 text-xs text-neutral-400">
                 최근 실행{' '}
                 {overview.latest_validation_run
@@ -288,10 +298,16 @@ export function WorkspaceHomePage() {
                     <div className="mb-2 flex flex-wrap items-center gap-2">
                       <div className="min-w-0 break-words font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>
                       <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
+                      <Badge className={getVerificationStateBadgeClass(concept.verification_state)}>
+                        {formatVerificationStateLabel(concept.verification_state)}
+                      </Badge>
                     </div>
                     <TrustBadges trust={concept.trust} />
                     <div className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
                       근거 문서 {concept.support_doc_count}개 · 별칭 {concept.aliases.slice(0, 4).join(', ') || '없음'}
+                    </div>
+                    <div className="mt-2 text-xs leading-6 text-neutral-500">
+                      {concept.verification.reason || '검증 상태 요약이 아직 없습니다.'}
                     </div>
                   </Link>
                 ))}

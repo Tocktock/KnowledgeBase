@@ -6,7 +6,12 @@ import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConcepts } from '@/lib/api/server'
-import { formatConceptTypeLabel, formatOwnerTeamLabel } from '@/lib/utils'
+import {
+  formatConceptTypeLabel,
+  formatOwnerTeamLabel,
+  formatVerificationStateLabel,
+  getVerificationStateBadgeClass,
+} from '@/lib/utils'
 
 export default async function GlossaryPage() {
   const glossary = await getGlossaryConcepts({ status: 'approved', limit: 60 }).catch(() => null)
@@ -49,6 +54,9 @@ export default async function GlossaryPage() {
             <Card className="h-full p-5 transition hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/5 dark:hover:border-blue-900">
               <div className="mb-2 flex flex-wrap gap-2">
                 <Badge>핵심 개념</Badge>
+                <Badge className={getVerificationStateBadgeClass(concept.verification_state)}>
+                  {formatVerificationStateLabel(concept.verification_state)}
+                </Badge>
                 <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                 {concept.owner_team_hint ? <Badge>{formatOwnerTeamLabel(concept.owner_team_hint)}</Badge> : null}
               </div>
@@ -60,6 +68,9 @@ export default async function GlossaryPage() {
               <p className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
                 {concept.aliases.slice(0, 5).join(', ') || '대표 용어와 근거 문서로 정제된 개념입니다.'}
               </p>
+              <div className="mt-3 text-xs leading-6 text-neutral-500">
+                {concept.verification.reason || '검증 정책 기준으로 계속 모니터링되는 개념입니다.'}
+              </div>
               {concept.canonical_document ? (
                 <div className="mt-4 text-sm text-blue-600 dark:text-blue-400">대표 문서 연결됨</div>
               ) : null}

@@ -325,6 +325,7 @@ async def process_glossary_job(session_factory: async_sessionmaker[AsyncSession]
         if job.kind == GlossaryJobKind.refresh.value:
             updated_count = await refresh_glossary_concepts(
                 session,
+                workspace_id=job.workspace_id,
                 scope=job.scope,
                 target_document_id=job.target_document_id,
             )

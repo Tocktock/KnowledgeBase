@@ -5,6 +5,11 @@ Canonical schema modules:
 - `internal_kb_fullstack/backend/app/schemas/connectors.py`
 - `internal_kb_fullstack/backend/app/schemas/trust.py`
 
+Important workspace rule:
+
+- connector APIs resolve workspace scope from the authenticated session plus connection ownership
+- connector write contracts do not expose a public `workspace_id`
+
 ## Frontend page
 
 ### `GET /connectors`
@@ -216,3 +221,7 @@ Canonical schema modules:
 - Notion:
   - `page` and `database` are live connector resources
   - `export_upload` is a snapshot upload resource and is not sync-now capable
+- Slack:
+  - no public API routes yet
+  - future ingestion defaults to `evidence_only`
+  - future member-visible Slack knowledge must come from promoted summaries or curated outputs rather than raw channel sync

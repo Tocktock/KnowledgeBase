@@ -34,14 +34,16 @@ def test_current_chunk_filters_sql_includes_only_present_filters() -> None:
 async def test_assemble_concept_hits_excludes_evidence_only_supports(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_fetch_canonical_glossary_hit(_session, *, concept):
+    async def fake_fetch_canonical_glossary_hit(_session, *, concept, workspace_id=None):
         assert concept.display_term == "용어검증엔진"
+        assert workspace_id is None
         return None
 
     async def fake_get_concept_support_hits(
         _session,
         _concept_id,
         *,
+        workspace_id=None,
         limit,
         owner_team=None,
         doc_type=None,
@@ -55,6 +57,7 @@ async def test_assemble_concept_hits_excludes_evidence_only_supports(monkeypatch
                 "doc_type": doc_type,
                 "source_system": source_system,
                 "include_evidence_only": include_evidence_only,
+                "workspace_id": workspace_id,
             }
         )
         return []
@@ -81,4 +84,5 @@ async def test_assemble_concept_hits_excludes_evidence_only_supports(monkeypatch
         "doc_type": "knowledge",
         "source_system": None,
         "include_evidence_only": False,
+        "workspace_id": None,
     }

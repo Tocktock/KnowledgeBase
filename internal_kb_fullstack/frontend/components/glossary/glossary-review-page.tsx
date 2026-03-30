@@ -24,6 +24,8 @@ import {
   formatEvidenceKindLabel,
   formatOwnerTeamLabel,
   formatStatusLabel,
+  formatVerificationStateLabel,
+  getVerificationStateBadgeClass,
 } from '@/lib/utils'
 
 async function fetchGlossaryList(params: Record<string, string | number | undefined>) {
@@ -123,8 +125,23 @@ async function updateConcept(id: string, payload: Record<string, unknown>) {
     body: JSON.stringify(payload),
   })
   if (!response.ok) {
-    const body = (await response.json()) as { detail?: string }
-    throw new Error(body.detail || '용어집 상태 변경에 실패했습니다.')
+    const body = (await response.json()) as {
+      detail?:
+        | string
+        | {
+            message?: string
+            reasons?: string[]
+          }
+    }
+    if (typeof body.detail === 'string') {
+      throw new Error(body.detail || '용어집 상태 변경에 실패했습니다.')
+    }
+    if (body.detail && typeof body.detail === 'object') {
+      const reasons = Array.isArray(body.detail.reasons) ? body.detail.reasons.filter(Boolean) : []
+      const message = body.detail.message || '용어집 상태 변경에 실패했습니다.'
+      throw new Error(reasons.length ? `${message} ${reasons.join(' ')}` : message)
+    }
+    throw new Error('용어집 상태 변경에 실패했습니다.')
   }
   return (await response.json()) as GlossaryConceptDetailResponse
 }
@@ -148,6 +165,12 @@ export function GlossaryReviewPage({
   const validationCounts = useMemo(() => {
     return concepts.reduce<Record<string, number>>((acc, concept) => {
       acc[concept.validation_state] = (acc[concept.validation_state] ?? 0) + 1
+      return acc
+    }, {})
+  }, [concepts])
+  const verificationCounts = useMemo(() => {
+    return concepts.reduce<Record<string, number>>((acc, concept) => {
+      acc[concept.verification_state] = (acc[concept.verification_state] ?? 0) + 1
       return acc
     }, {})
   }, [concepts])
@@ -263,24 +286,30 @@ export function GlossaryReviewPage({
             <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{reviewRequiredCount}</div>
           </div>
           <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
-            <div className="text-xs text-neutral-500">근거 재검토</div>
-            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{validationCounts.stale_evidence ?? 0}</div>
+            <div className="text-xs text-neutral-500">검증 완료</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{verificationCounts.verified ?? 0}</div>
           </div>
           <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
-            <div className="text-xs text-neutral-500">초안 필요</div>
-            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{validationCounts.missing_draft ?? 0}</div>
+            <div className="text-xs text-neutral-500">모니터링 중</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{verificationCounts.monitoring ?? 0}</div>
           </div>
           <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
-            <div className="text-xs text-neutral-500">신규 용어</div>
-            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{validationCounts.new_term ?? 0}</div>
+            <div className="text-xs text-neutral-500">드리프트 감지</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{verificationCounts.drift_detected ?? 0}</div>
           </div>
           <div className="rounded-2xl bg-neutral-50 px-4 py-4 dark:bg-neutral-900">
-            <div className="text-xs text-neutral-500">최근 실행</div>
-            <div className="mt-2 text-sm font-medium text-neutral-950 dark:text-neutral-50">
-              {latestRun ? formatStatusLabel(latestRun.status) : '아직 없음'}
-            </div>
-            {latestRun ? <div className="mt-1 text-xs text-neutral-500">{formatDate(latestRun.requested_at)}</div> : null}
+            <div className="text-xs text-neutral-500">근거 부족</div>
+            <div className="mt-2 text-2xl font-semibold text-neutral-950 dark:text-neutral-50">{verificationCounts.evidence_insufficient ?? 0}</div>
           </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-neutral-500">
+          <Badge className={getVerificationStateBadgeClass('archived')}>
+            {formatVerificationStateLabel('archived')} {verificationCounts.archived ?? 0}
+          </Badge>
+          <Badge>근거 재검토 {validationCounts.stale_evidence ?? 0}</Badge>
+          <Badge>초안 필요 {validationCounts.missing_draft ?? 0}</Badge>
+          <Badge>신규 용어 {validationCounts.new_term ?? 0}</Badge>
+          <Badge>최근 실행 {latestRun ? `${formatStatusLabel(latestRun.status)} · ${formatDate(latestRun.requested_at)}` : '아직 없음'}</Badge>
         </div>
 
         <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_180px_180px_180px_auto]">
@@ -312,6 +341,9 @@ export function GlossaryReviewPage({
             >
               <div className="mb-2 flex flex-wrap gap-2">
                 <Badge>{formatStatusLabel(concept.status)}</Badge>
+                <Badge className={getVerificationStateBadgeClass(concept.verification_state)}>
+                  {formatVerificationStateLabel(concept.verification_state)}
+                </Badge>
                 <Badge>{formatValidationStateLabel(concept.validation_state)}</Badge>
                 <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                 <Badge>근거 문서 {concept.support_doc_count}개</Badge>
@@ -325,6 +357,9 @@ export function GlossaryReviewPage({
               {concept.review_required ? (
                 <div className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">검토가 필요한 용어입니다.</div>
               ) : null}
+              <div className="mt-2 text-xs leading-6 text-neutral-500">
+                {concept.verification.reason || '검증 사유가 아직 기록되지 않았습니다.'}
+              </div>
             </Link>
           ))}
           {concepts.length === 0 ? <div className="rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-500 dark:bg-neutral-900">조건에 맞는 후보가 없습니다.</div> : null}
@@ -427,6 +462,9 @@ export function GlossaryReviewDetailPage({
                 <div className="min-w-0">
                   <div className="mb-2 flex flex-wrap gap-2">
                     <Badge>{formatStatusLabel(detail.concept.status)}</Badge>
+                    <Badge className={getVerificationStateBadgeClass(detail.concept.verification_state)}>
+                      {formatVerificationStateLabel(detail.concept.verification_state)}
+                    </Badge>
                     <Badge>{formatValidationStateLabel(detail.concept.validation_state)}</Badge>
                     <Badge>{formatConceptTypeLabel(detail.concept.concept_type)}</Badge>
                     <Badge>근거 문서 {detail.concept.support_doc_count}개</Badge>
@@ -469,9 +507,20 @@ export function GlossaryReviewDetailPage({
 
               <div className="rounded-2xl border border-neutral-200 px-4 py-3 text-sm leading-7 text-neutral-600 dark:border-neutral-800 dark:text-neutral-400">
                 <div className="font-medium text-neutral-900 dark:text-neutral-50">검증 상태</div>
-                <div className="mt-2">{detail.concept.validation_reason || '현재 검증 메모가 없습니다.'}</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Badge className={getVerificationStateBadgeClass(detail.concept.verification_state)}>
+                    {formatVerificationStateLabel(detail.concept.verification_state)}
+                  </Badge>
+                  <Badge>{detail.concept.verification.policy_label}</Badge>
+                  <Badge>정책 v{detail.concept.verification.policy_version}</Badge>
+                  {detail.concept.verification.verified_by ? <Badge>검수자 {detail.concept.verification.verified_by}</Badge> : null}
+                </div>
+                <div className="mt-3">{detail.concept.verification.reason || detail.concept.validation_reason || '현재 검증 메모가 없습니다.'}</div>
                 <div className="mt-2 text-xs text-neutral-500">
-                  마지막 검증 {detail.concept.last_validated_at ? formatDate(detail.concept.last_validated_at) : '기록 없음'} · 근거 출처 {detail.concept.source_system_mix.join(', ') || '없음'}
+                  마지막 검증 {detail.concept.last_validated_at ? formatDate(detail.concept.last_validated_at) : '기록 없음'} · 마지막 확인 {formatDate(detail.concept.verification.last_checked_at)} · 다음 확인 {formatDate(detail.concept.verification.due_at)}
+                </div>
+                <div className="mt-2 text-xs text-neutral-500">
+                  근거 출처 {detail.concept.source_system_mix.join(', ') || '없음'} · 근거 해시 {detail.concept.verification.evidence_bundle_hash ?? '없음'}
                 </div>
               </div>
 
@@ -488,6 +537,9 @@ export function GlossaryReviewDetailPage({
                 </Button>
                 <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'mark_stale' }), '개념을 최신성 낮음 상태로 표시했습니다.')} disabled={acting || !detail}>
                   최신성 낮음 표시
+                </Button>
+                <Button type="button" variant="outline" onClick={() => detail && void runAction(() => updateConcept(detail.concept.id, { action: 'archive' }), '개념을 보관했습니다.')} disabled={acting || !detail}>
+                  보관
                 </Button>
                 <Button type="button" variant="outline" onClick={() => void runValidation()} disabled={acting || !detail}>
                   이 용어 다시 검증
@@ -590,6 +642,9 @@ export function GlossaryReviewDetailPage({
                 <Link key={concept.id} href={`/glossary/${concept.slug}`} className="rounded-2xl border border-neutral-200 px-4 py-3 transition hover:border-blue-300 dark:border-neutral-800 dark:hover:border-blue-900">
                   <div className="mb-2 flex flex-wrap gap-2">
                     <Badge>{formatStatusLabel(concept.status)}</Badge>
+                    <Badge className={getVerificationStateBadgeClass(concept.verification_state)}>
+                      {formatVerificationStateLabel(concept.verification_state)}
+                    </Badge>
                     <Badge>{formatConceptTypeLabel(concept.concept_type)}</Badge>
                   </div>
                   <div className="break-words font-medium text-neutral-900 dark:text-neutral-50">{concept.display_term}</div>

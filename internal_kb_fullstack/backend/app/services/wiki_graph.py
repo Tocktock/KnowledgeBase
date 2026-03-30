@@ -90,6 +90,7 @@ async def sync_document_links(
     document_id: UUID,
     revision_id: UUID,
     markdown: str | None,
+    workspace_id: UUID | None = None,
 ) -> None:
     await session.execute(delete(DocumentLink).where(DocumentLink.source_revision_id == revision_id))
 
@@ -98,7 +99,10 @@ async def sync_document_links(
         return
 
     target_slugs = list(dict.fromkeys(link.target_slug for link in links))
-    existing_rows = await session.execute(select(Document.id, Document.slug).where(Document.slug.in_(target_slugs)))
+    stmt = select(Document.id, Document.slug).where(Document.slug.in_(target_slugs))
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
+    existing_rows = await session.execute(stmt)
     target_by_slug = {row.slug: row.id for row in existing_rows}
 
     rows = [
@@ -120,9 +124,13 @@ async def get_document_relations(
     session: AsyncSession,
     *,
     document_id: UUID,
+    workspace_id: UUID | None = None,
     limit: int = 8,
 ) -> dict[str, list[dict]]:
-    document = await session.get(Document, document_id)
+    stmt = select(Document).where(Document.id == document_id)
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
+    document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
         return {"outgoing": [], "backlinks": [], "related": []}
 
@@ -139,10 +147,18 @@ async def get_document_relations(
         )
         outgoing_slugs = list(dict.fromkeys(result.scalars().all()))
 
-    outgoing = await lookup_documents_by_slugs(session, outgoing_slugs, exclude_id=document.id)
-    backlinks = await find_backlinks(session, target_document_id=document.id, target_slug=document.slug, exclude_id=document.id, limit=limit)
+    outgoing = await lookup_documents_by_slugs(session, outgoing_slugs, workspace_id=document.workspace_id, exclude_id=document.id)
+    backlinks = await find_backlinks(
+        session,
+        workspace_id=document.workspace_id,
+        target_document_id=document.id,
+        target_slug=document.slug,
+        exclude_id=document.id,
+        limit=limit,
+    )
     related = await find_related_documents(
         session,
+        workspace_id=document.workspace_id,
         title=document.title,
         owner_team=document.owner_team,
         exclude_id=document.id,
@@ -159,6 +175,7 @@ async def get_document_relations(
 async def find_backlinks(
     session: AsyncSession,
     *,
+    workspace_id: UUID | None = None,
     target_document_id: UUID,
     target_slug: str,
     exclude_id: UUID,
@@ -198,6 +215,8 @@ async def find_backlinks(
         .order_by(Document.updated_at.desc())
         .limit(limit)
     )
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
 
     rows = (await session.execute(stmt)).mappings().all()
     return [dict(row) for row in rows]

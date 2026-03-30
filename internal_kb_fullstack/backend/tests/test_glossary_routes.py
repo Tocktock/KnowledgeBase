@@ -24,7 +24,7 @@ from app.schemas.glossary import (
     GlossaryValidationRunSummary,
 )
 from app.schemas.search import SearchExplainResponse, SearchHit, SearchResponse
-from app.schemas.trust import TrustSummary
+from app.schemas.trust import TrustSummary, VerificationSummary
 from app.services.auth import AuthenticatedUser
 from app.services.glossary import GlossaryNotFoundError
 
@@ -76,6 +76,18 @@ def make_glossary_summary() -> GlossaryConceptSummary:
         last_validated_at=datetime.now(timezone.utc),
         review_required=True,
         last_validation_run_id=uuid4(),
+        verification_state="monitoring",
+        verification=VerificationSummary(
+            status="monitoring",
+            policy_label="Default glossary verification",
+            policy_version=1,
+            evidence_bundle_hash="bundle-hash",
+            verified_at=None,
+            due_at=datetime.now(timezone.utc),
+            last_checked_at=datetime.now(timezone.utc),
+            verified_by=None,
+            reason="센디 차량 satisfies the current evidence policy but is still awaiting or retaining review attention.",
+        ),
         owner_team_hint="product",
         source_system_mix=["notion-export"],
         generated_document=generated_doc,
@@ -140,12 +152,17 @@ def make_auth_user(*, role: str = "owner") -> AuthenticatedUser:
     )
 
 
+async def fake_resolve_read_workspace_id(*_args, **_kwargs):
+    return None
+
+
 @pytest.mark.asyncio
 async def test_search_route_returns_concept_aware_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     async def override_session():
         yield object()
 
-    async def fake_search_documents(_session: object, _payload: object) -> SearchResponse:
+    async def fake_search_documents(_session: object, _payload: object, *, workspace_id=None) -> SearchResponse:
+        assert workspace_id is None
         return SearchResponse(
             query="센디 차량",
             resolved_concept_id=uuid4(),
@@ -183,6 +200,7 @@ async def test_search_route_returns_concept_aware_payload(monkeypatch: pytest.Mo
         )
 
     monkeypatch.setattr(search_route, "search_documents", fake_search_documents)
+    monkeypatch.setattr(search_route, "resolve_read_workspace_id", fake_resolve_read_workspace_id)
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
@@ -203,7 +221,8 @@ async def test_search_explain_route_returns_debug_surface(monkeypatch: pytest.Mo
     async def override_session():
         yield object()
 
-    async def fake_explain_search(_session: object, _payload: object) -> SearchExplainResponse:
+    async def fake_explain_search(_session: object, _payload: object, *, workspace_id=None) -> SearchExplainResponse:
+        assert workspace_id is None
         return SearchExplainResponse(
             query="센디 차량",
             normalized_query="센디 차량",
@@ -217,6 +236,7 @@ async def test_search_explain_route_returns_debug_surface(monkeypatch: pytest.Mo
         )
 
     monkeypatch.setattr(search_route, "explain_search", fake_explain_search)
+    monkeypatch.setattr(search_route, "resolve_read_workspace_id", fake_resolve_read_workspace_id)
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)
@@ -237,7 +257,15 @@ async def test_glossary_refresh_route_returns_queued_job(monkeypatch: pytest.Mon
     async def override_session():
         yield session
 
-    async def fake_enqueue_glossary_refresh_job(_session: object, *, scope: str = "full", target_document_id: object = None, priority: int = 200):
+    async def fake_enqueue_glossary_refresh_job(
+        _session: object,
+        *,
+        workspace_id=None,
+        scope: str = "full",
+        target_document_id: object = None,
+        priority: int = 200,
+    ):
+        assert workspace_id == auth_user.current_workspace_id
         return SimpleNamespace(
             id=uuid4(),
             kind="refresh",
@@ -446,10 +474,12 @@ async def test_glossary_by_slug_route_maps_not_found(monkeypatch: pytest.MonkeyP
     async def override_session():
         yield object()
 
-    async def fake_get_glossary_concept_by_slug(_session: object, _slug: str):
+    async def fake_get_glossary_concept_by_slug(_session: object, _slug: str, *, workspace_id=None):
+        assert workspace_id is None
         raise GlossaryNotFoundError("Glossary concept not found")
 
     monkeypatch.setattr(glossary_route, "get_glossary_concept_by_slug", fake_get_glossary_concept_by_slug)
+    monkeypatch.setattr(glossary_route, "resolve_read_workspace_id", fake_resolve_read_workspace_id)
     app.dependency_overrides[get_db_session] = override_session
 
     transport = ASGITransport(app=app)

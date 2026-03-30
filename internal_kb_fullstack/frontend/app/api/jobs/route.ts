@@ -1,6 +1,10 @@
-import { proxyJson, toNextJson } from '@/lib/api/proxy'
+import { NextRequest } from 'next/server'
 
-export async function GET() {
-  const response = await proxyJson('/v1/jobs')
+import { getSessionToken, proxyJson, toNextJson } from '@/lib/api/proxy'
+
+export async function GET(request: NextRequest) {
+  const response = await proxyJson('/v1/jobs', {
+    sessionToken: getSessionToken(request),
+  })
   return toNextJson(response)
 }

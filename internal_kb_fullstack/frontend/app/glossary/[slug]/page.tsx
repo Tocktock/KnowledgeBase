@@ -5,7 +5,16 @@ import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConceptBySlug } from '@/lib/api/server'
-import { formatConceptTypeLabel, formatDocTypeLabel, formatEvidenceKindLabel, formatOwnerTeamLabel, formatStatusLabel } from '@/lib/utils'
+import {
+  formatConceptTypeLabel,
+  formatDate,
+  formatDocTypeLabel,
+  formatEvidenceKindLabel,
+  formatOwnerTeamLabel,
+  formatStatusLabel,
+  formatVerificationStateLabel,
+  getVerificationStateBadgeClass,
+} from '@/lib/utils'
 
 export default async function GlossaryDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
@@ -18,6 +27,9 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
         <div className="mb-4 flex flex-wrap gap-2">
           <Badge>핵심 개념</Badge>
           <Badge>{formatStatusLabel(detail.concept.status)}</Badge>
+          <Badge className={getVerificationStateBadgeClass(detail.concept.verification_state)}>
+            {formatVerificationStateLabel(detail.concept.verification_state)}
+          </Badge>
           <Badge>{formatConceptTypeLabel(detail.concept.concept_type)}</Badge>
           {detail.concept.owner_team_hint ? <Badge>{formatOwnerTeamLabel(detail.concept.owner_team_hint)}</Badge> : null}
         </div>
@@ -33,6 +45,25 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
         <div className="mt-4 rounded-2xl bg-neutral-50 px-4 py-3 text-sm leading-7 text-neutral-600 dark:bg-neutral-900 dark:text-neutral-400">
           별칭: {detail.concept.aliases.length ? detail.concept.aliases.join(', ') : '없음'}
         </div>
+        <div className="mt-4 rounded-2xl border border-neutral-200 px-4 py-4 dark:border-neutral-800">
+          <div className="mb-2 text-sm font-semibold text-neutral-900 dark:text-neutral-50">검증 요약</div>
+          <div className="flex flex-wrap gap-2">
+            <Badge className={getVerificationStateBadgeClass(detail.concept.verification_state)}>
+              {formatVerificationStateLabel(detail.concept.verification_state)}
+            </Badge>
+            <Badge>{detail.concept.verification.policy_label}</Badge>
+            <Badge>정책 v{detail.concept.verification.policy_version}</Badge>
+            {detail.concept.verification.verified_by ? <Badge>검수자 {detail.concept.verification.verified_by}</Badge> : null}
+          </div>
+          <div className="mt-3 text-sm leading-7 text-neutral-600 dark:text-neutral-400">
+            {detail.concept.verification.reason || '현재 검증 사유가 기록되지 않았습니다.'}
+          </div>
+          <div className="mt-3 grid gap-3 text-xs text-neutral-500 md:grid-cols-3">
+            <div>마지막 확인 {formatDate(detail.concept.verification.last_checked_at)}</div>
+            <div>다음 확인 {formatDate(detail.concept.verification.due_at)}</div>
+            <div>검증 완료 {formatDate(detail.concept.verification.verified_at)}</div>
+          </div>
+        </div>
         <div className="mt-5 flex flex-wrap gap-3">
           {detail.concept.canonical_document ? (
             <Link href={`/docs/${detail.concept.canonical_document.slug}`} className="text-sm font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400">
@@ -44,6 +75,52 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
               초안 문서 열기
             </Link>
           ) : null}
+        </div>
+      </Card>
+
+      <Card className="p-6">
+        <div className="mb-4 text-sm font-semibold text-neutral-900 dark:text-neutral-50">Knowledge Passport</div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-neutral-200 px-4 py-4 dark:border-neutral-800">
+            <div className="text-xs text-neutral-500">대표 문서</div>
+            <div className="mt-2 text-sm font-medium text-neutral-900 dark:text-neutral-50">
+              {detail.concept.canonical_document ? detail.concept.canonical_document.title : '아직 없음'}
+            </div>
+            {detail.concept.canonical_document ? (
+              <Link href={`/docs/${detail.concept.canonical_document.slug}`} className="mt-2 inline-flex text-xs text-blue-600 hover:text-blue-500 dark:text-blue-400">
+                대표 문서 열기
+              </Link>
+            ) : null}
+          </div>
+          <div className="rounded-2xl border border-neutral-200 px-4 py-4 dark:border-neutral-800">
+            <div className="text-xs text-neutral-500">작업 초안</div>
+            <div className="mt-2 text-sm font-medium text-neutral-900 dark:text-neutral-50">
+              {detail.concept.generated_document ? detail.concept.generated_document.title : '없음'}
+            </div>
+            {detail.concept.generated_document ? (
+              <Link href={`/docs/${detail.concept.generated_document.slug}`} className="mt-2 inline-flex text-xs text-blue-600 hover:text-blue-500 dark:text-blue-400">
+                초안 열기
+              </Link>
+            ) : null}
+          </div>
+          <div className="rounded-2xl border border-neutral-200 px-4 py-4 dark:border-neutral-800">
+            <div className="text-xs text-neutral-500">근거 묶음</div>
+            <div className="mt-2 text-sm font-medium text-neutral-900 dark:text-neutral-50">
+              문서 {detail.concept.support_doc_count}개 · 구간 {detail.concept.support_chunk_count}개
+            </div>
+            <div className="mt-2 text-xs text-neutral-500">
+              해시 {detail.concept.verification.evidence_bundle_hash ?? '없음'}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-neutral-200 px-4 py-4 dark:border-neutral-800">
+            <div className="text-xs text-neutral-500">출처 / 연결</div>
+            <div className="mt-2 text-sm font-medium text-neutral-900 dark:text-neutral-50">
+              {detail.concept.source_system_mix.join(', ') || '출처 없음'}
+            </div>
+            <div className="mt-2 text-xs text-neutral-500">
+              연관 개념 {detail.related_concepts.length}개
+            </div>
+          </div>
         </div>
       </Card>
 

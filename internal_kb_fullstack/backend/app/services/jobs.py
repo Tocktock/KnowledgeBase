@@ -64,9 +64,10 @@ async def request_document_reindex(
     session: AsyncSession,
     *,
     document_id: UUID,
+    workspace_id: UUID | None,
     priority: int,
 ) -> EmbeddingJob | None:
-    document, revision, _chunks = await get_document_detail(session, document_id)
+    document, revision, _chunks = await get_document_detail(session, document_id, workspace_id=workspace_id)
     if document is None or revision is None:
         return None
 
@@ -103,20 +104,51 @@ def _connector_job_title(job: ConnectorSyncJob, resources_by_id: dict[UUID, Conn
     return "리소스 동기화"
 
 
-async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[JobSummary]:
+async def list_recent_jobs(
+    session: AsyncSession,
+    *,
+    workspace_id: UUID | None = None,
+    limit: int = 50,
+) -> list[JobSummary]:
+    embedding_filters = []
+    if workspace_id is not None:
+        embedding_filters.append(Document.workspace_id == workspace_id)
     embedding_jobs = list(
         (
-            await session.execute(select(EmbeddingJob).order_by(EmbeddingJob.requested_at.desc()).limit(limit))
+            await session.execute(
+                select(EmbeddingJob)
+                .join(Document, Document.id == EmbeddingJob.document_id)
+                .where(*embedding_filters)
+                .order_by(EmbeddingJob.requested_at.desc())
+                .limit(limit)
+            )
         ).scalars().all()
     )
+    glossary_filters = []
+    if workspace_id is not None:
+        glossary_filters.append(GlossaryJob.workspace_id == workspace_id)
     glossary_jobs = list(
         (
-            await session.execute(select(GlossaryJob).order_by(GlossaryJob.requested_at.desc()).limit(limit))
+            await session.execute(
+                select(GlossaryJob)
+                .where(*glossary_filters)
+                .order_by(GlossaryJob.requested_at.desc())
+                .limit(limit)
+            )
         ).scalars().all()
     )
+    connector_filters = []
+    if workspace_id is not None:
+        connector_filters.append(ConnectorConnection.workspace_id == workspace_id)
     connector_jobs = list(
         (
-            await session.execute(select(ConnectorSyncJob).order_by(ConnectorSyncJob.requested_at.desc()).limit(limit))
+            await session.execute(
+                select(ConnectorSyncJob)
+                .join(ConnectorConnection, ConnectorConnection.id == ConnectorSyncJob.connection_id)
+                .where(*connector_filters)
+                .order_by(ConnectorSyncJob.requested_at.desc())
+                .limit(limit)
+            )
         ).scalars().all()
     )
     document_ids = {job.document_id for job in embedding_jobs}
@@ -172,10 +204,17 @@ async def list_recent_jobs(session: AsyncSession, *, limit: int = 50) -> list[Jo
     return sorted(summaries, key=lambda item: item.requested_at, reverse=True)[:limit]
 
 
-async def get_job_summary(session: AsyncSession, job_id: UUID) -> JobSummary | None:
+async def get_job_summary(
+    session: AsyncSession,
+    job_id: UUID,
+    *,
+    workspace_id: UUID | None = None,
+) -> JobSummary | None:
     embedding_job = await session.get(EmbeddingJob, job_id)
     if embedding_job is not None:
         document = await session.get(Document, embedding_job.document_id)
+        if workspace_id is not None and (document is None or document.workspace_id != workspace_id):
+            return None
         return JobSummary.model_validate(embedding_job).model_copy(
             update={
                 "kind": "embedding",
@@ -189,6 +228,8 @@ async def get_job_summary(session: AsyncSession, job_id: UUID) -> JobSummary | N
 
     glossary_job = await session.get(GlossaryJob, job_id)
     if glossary_job is not None:
+        if workspace_id is not None and glossary_job.workspace_id != workspace_id:
+            return None
         concept = await session.get(KnowledgeConcept, glossary_job.target_concept_id) if glossary_job.target_concept_id is not None else None
         return JobSummary.model_validate(glossary_job).model_copy(
             update={
@@ -205,6 +246,10 @@ async def get_job_summary(session: AsyncSession, job_id: UUID) -> JobSummary | N
         return None
 
     resource = await session.get(ConnectorResource, connector_job.resource_id)
+    if workspace_id is not None:
+        connection = await session.get(ConnectorConnection, connector_job.connection_id)
+        if connection is None or connection.workspace_id != workspace_id:
+            return None
     return JobSummary.model_validate(connector_job).model_copy(
         update={
             "kind": connector_job.kind,

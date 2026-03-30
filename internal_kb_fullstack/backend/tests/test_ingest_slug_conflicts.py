@@ -7,10 +7,12 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api.deps import get_authenticated_user
 from app.api.routes import documents as documents_route
 from app.db.engine import get_db_session
 from app.main import app
 from app.schemas.documents import IngestDocumentRequest
+from app.services.auth import AuthenticatedUser
 from app.services.ingest import DocumentMatch, SlugConflictError, _upsert_document
 
 
@@ -62,18 +64,43 @@ def make_document(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
+def make_auth_user() -> AuthenticatedUser:
+    return AuthenticatedUser(
+        user=SimpleNamespace(id=uuid4(), email="member@example.com", name="Member", avatar_url=None),
+        roles=["member"],
+        current_workspace_id=uuid4(),
+        current_workspace_slug="default",
+        current_workspace_name="Default Workspace",
+        current_workspace_role="member",
+    )
+
+
 @pytest.mark.asyncio
 async def test_upsert_document_raises_slug_conflict_when_slug_updates_disallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     session = StubSession()
     existing = make_document()
 
-    async def fake_find_document(_session: object, _payload: IngestDocumentRequest, _resolved_slug: str) -> DocumentMatch:
+    expected_workspace_id = uuid4()
+
+    async def fake_find_document(
+        _session: object,
+        _payload: IngestDocumentRequest,
+        _resolved_slug: str,
+        *,
+        workspace_id: object = None,
+    ) -> DocumentMatch:
+        assert workspace_id == expected_workspace_id
         return DocumentMatch(document=existing, matched_by="slug")
 
     monkeypatch.setattr("app.services.ingest._find_document", fake_find_document)
 
     with pytest.raises(SlugConflictError) as exc_info:
-        await _upsert_document(session, payload=make_payload(allow_slug_update=False), resolved_slug="transport")
+        await _upsert_document(
+            session,
+            payload=make_payload(allow_slug_update=False),
+            resolved_slug="transport",
+            workspace_id=expected_workspace_id,
+        )
 
     assert exc_info.value.document is existing
     assert session.flush_calls == 0
@@ -85,7 +112,16 @@ async def test_upsert_document_updates_existing_slug_when_allowed(monkeypatch: p
     existing = make_document()
     fixed_now = datetime(2026, 3, 22, tzinfo=timezone.utc)
 
-    async def fake_find_document(_session: object, _payload: IngestDocumentRequest, _resolved_slug: str) -> DocumentMatch:
+    expected_workspace_id = uuid4()
+
+    async def fake_find_document(
+        _session: object,
+        _payload: IngestDocumentRequest,
+        _resolved_slug: str,
+        *,
+        workspace_id: object = None,
+    ) -> DocumentMatch:
+        assert workspace_id == expected_workspace_id
         return DocumentMatch(document=existing, matched_by="slug")
 
     monkeypatch.setattr("app.services.ingest._find_document", fake_find_document)
@@ -95,6 +131,7 @@ async def test_upsert_document_updates_existing_slug_when_allowed(monkeypatch: p
         session,
         payload=make_payload(title="Transport Updated", owner_team="logistics", allow_slug_update=True),
         resolved_slug="transport",
+        workspace_id=expected_workspace_id,
     )
 
     assert document is existing
@@ -110,11 +147,26 @@ async def test_upsert_document_allows_source_external_id_match_even_when_slug_up
 ) -> None:
     session = StubSession()
     existing = make_document(source_external_id="source-123", slug="transport-old")
+    expected_workspace_id = uuid4()
 
-    async def fake_find_document(_session: object, _payload: IngestDocumentRequest, _resolved_slug: str) -> DocumentMatch:
+    async def fake_find_document(
+        _session: object,
+        _payload: IngestDocumentRequest,
+        _resolved_slug: str,
+        *,
+        workspace_id: object = None,
+    ) -> DocumentMatch:
+        assert workspace_id == expected_workspace_id
         return DocumentMatch(document=existing, matched_by="source_external_id")
 
-    async def fake_get_document_by_slug(_session: object, _slug: str, *, exclude_id: object = None) -> None:
+    async def fake_get_document_by_slug(
+        _session: object,
+        _slug: str,
+        *,
+        workspace_id: object = None,
+        exclude_id: object = None,
+    ) -> None:
+        assert workspace_id == expected_workspace_id
         return None
 
     monkeypatch.setattr("app.services.ingest._find_document", fake_find_document)
@@ -124,6 +176,7 @@ async def test_upsert_document_allows_source_external_id_match_even_when_slug_up
         session,
         payload=make_payload(source_external_id="source-123", allow_slug_update=False),
         resolved_slug="transport",
+        workspace_id=expected_workspace_id,
     )
 
     assert document is existing
@@ -138,11 +191,15 @@ async def test_ingest_route_returns_structured_slug_conflict(monkeypatch: pytest
     async def override_session():
         yield object()
 
-    async def fake_ingest_document(_session: object, _payload: IngestDocumentRequest):
+    auth_user = make_auth_user()
+
+    async def fake_ingest_document(_session: object, _payload: IngestDocumentRequest, *, workspace_id):
+        assert workspace_id == auth_user.current_workspace_id
         raise SlugConflictError(conflict_document)
 
     monkeypatch.setattr(documents_route, "ingest_document", fake_ingest_document)
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_authenticated_user] = lambda: auth_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -178,3 +235,33 @@ async def test_ingest_route_returns_structured_slug_conflict(monkeypatch: pytest
             },
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_ingest_route_requires_authentication() -> None:
+    async def override_session():
+        yield object()
+
+    app.dependency_overrides[get_db_session] = override_session
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/v1/documents/ingest",
+            json={
+                "source_system": "manual",
+                "title": "Transport",
+                "slug": "transport",
+                "content_type": "markdown",
+                "content": "# Transport",
+                "doc_type": "knowledge",
+                "language_code": "ko",
+                "status": "draft",
+                "metadata": {},
+            },
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authentication required."

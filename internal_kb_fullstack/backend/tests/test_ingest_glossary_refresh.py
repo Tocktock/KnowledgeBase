@@ -12,6 +12,7 @@ from app.services.ingest import _maybe_enqueue_incremental_glossary_refresh
 def make_document(*, status: str, source_system: str) -> Document:
     return Document(
         id=uuid4(),
+        workspace_id=uuid4(),
         source_system=source_system,
         source_external_id=None,
         source_url=None,
@@ -28,10 +29,10 @@ def make_document(*, status: str, source_system: str) -> Document:
 
 @pytest.mark.asyncio
 async def test_enqueue_incremental_glossary_refresh_for_published_non_glossary_doc(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, object, int]] = []
+    calls: list[tuple[object, str, object, int]] = []
 
-    async def fake_enqueue(_session: object, *, scope: str, target_document_id: object, priority: int):
-        calls.append((scope, target_document_id, priority))
+    async def fake_enqueue(_session: object, *, workspace_id: object, scope: str, target_document_id: object, priority: int):
+        calls.append((workspace_id, scope, target_document_id, priority))
         return None
 
     monkeypatch.setattr(glossary_service, "enqueue_glossary_refresh_job", fake_enqueue)
@@ -39,15 +40,15 @@ async def test_enqueue_incremental_glossary_refresh_for_published_non_glossary_d
     document = make_document(status="published", source_system="manual")
     await _maybe_enqueue_incremental_glossary_refresh(object(), document)
 
-    assert calls == [("incremental", document.id, 160)]
+    assert calls == [(document.workspace_id, "incremental", document.id, 160)]
 
 
 @pytest.mark.asyncio
 async def test_skip_incremental_glossary_refresh_for_draft_or_glossary_doc(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, object, int]] = []
+    calls: list[tuple[object, str, object, int]] = []
 
-    async def fake_enqueue(_session: object, *, scope: str, target_document_id: object, priority: int):
-        calls.append((scope, target_document_id, priority))
+    async def fake_enqueue(_session: object, *, workspace_id: object, scope: str, target_document_id: object, priority: int):
+        calls.append((workspace_id, scope, target_document_id, priority))
         return None
 
     monkeypatch.setattr(glossary_service, "enqueue_glossary_refresh_job", fake_enqueue)

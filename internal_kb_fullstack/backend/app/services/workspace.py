@@ -59,6 +59,32 @@ class WorkspaceNotFoundError(WorkspaceError):
     pass
 
 
+async def get_default_workspace(session: AsyncSession) -> Workspace | None:
+    workspace = (
+        await session.execute(
+            select(Workspace).where(Workspace.is_default.is_(True)).order_by(Workspace.created_at.asc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    if workspace is not None:
+        return workspace
+    return (
+        await session.execute(select(Workspace).order_by(Workspace.created_at.asc()).limit(1))
+    ).scalar_one_or_none()
+
+
+async def resolve_read_workspace_id(
+    session: AsyncSession,
+    auth_user: AuthenticatedUser | None,
+) -> UUID | None:
+    if auth_user is not None:
+        if auth_user.current_workspace_id is not None:
+            return auth_user.current_workspace_id
+        default_workspace = await get_default_workspace(session)
+        return default_workspace.id if default_workspace is not None else None
+    default_workspace = await get_default_workspace(session)
+    return default_workspace.id if default_workspace is not None else None
+
+
 def _require_workspace(auth_user: AuthenticatedUser) -> UUID:
     if auth_user.current_workspace_id is None:
         raise WorkspaceForbiddenError("Workspace context is required.")
@@ -165,25 +191,7 @@ async def get_workspace_overview(
     session: AsyncSession,
     auth_user: AuthenticatedUser | None,
 ) -> WorkspaceOverviewResponse:
-    rows, _total = await list_documents(session, limit=6)
-    featured_docs = [_document_list_item(row) for row in rows]
-    featured_concepts = (await list_glossary_concepts(session, status_filter="approved", limit=6)).items
-    latest_validation_run = None
-    review_required_count = 0
-
-    if auth_user is None:
-        return WorkspaceOverviewResponse(
-            authenticated=False,
-            featured_docs=featured_docs,
-            featured_concepts=featured_concepts,
-            setup_state="anonymous",
-            next_actions=[
-                "로그인하고 워크스페이스 지식 레이어를 시작하세요.",
-                "구성원은 연결 구조를 몰라도 검색과 문서 탐색으로 바로 답을 찾을 수 있습니다.",
-            ],
-        )
-
-    if auth_user.current_workspace_id is None:
+    if auth_user is not None and auth_user.current_workspace_id is None:
         return WorkspaceOverviewResponse(
             authenticated=True,
             workspace=None,
@@ -197,6 +205,35 @@ async def get_workspace_overview(
                 "초대를 수락하면 검색, 문서, 핵심 개념 화면이 워크스페이스 기준으로 활성화됩니다.",
             ],
             recent_sync_issues=[],
+            verification_counts={},
+        )
+
+    read_workspace_id = await resolve_read_workspace_id(session, auth_user)
+    rows, _total = await list_documents(session, workspace_id=read_workspace_id, limit=6)
+    featured_docs = [_document_list_item(row) for row in rows]
+    featured_concepts = (
+        await list_glossary_concepts(
+            session,
+            workspace_id=read_workspace_id,
+            status_filter="approved",
+            limit=6,
+        )
+    ).items
+    latest_validation_run = None
+    review_required_count = 0
+    verification_counts: dict[str, int] = {}
+
+    if auth_user is None:
+        return WorkspaceOverviewResponse(
+            authenticated=False,
+            featured_docs=featured_docs,
+            featured_concepts=featured_concepts,
+            verification_counts=verification_counts,
+            setup_state="anonymous",
+            next_actions=[
+                "로그인하고 워크스페이스 지식 레이어를 시작하세요.",
+                "구성원은 연결 구조를 몰라도 검색과 문서 탐색으로 바로 답을 찾을 수 있습니다.",
+            ],
         )
 
     workspace_id = auth_user.current_workspace_id
@@ -245,10 +282,21 @@ async def get_workspace_overview(
     review_required_count = int(
         (
             await session.execute(
-                select(func.count(KnowledgeConcept.id)).where(KnowledgeConcept.review_required.is_(True))
+                select(func.count(KnowledgeConcept.id)).where(
+                    KnowledgeConcept.workspace_id == workspace_id,
+                    KnowledgeConcept.review_required.is_(True),
+                )
             )
         ).scalar_one()
     )
+    verification_rows = (
+        await session.execute(
+            select(KnowledgeConcept.verification_state, func.count(KnowledgeConcept.id))
+            .where(KnowledgeConcept.workspace_id == workspace_id)
+            .group_by(KnowledgeConcept.verification_state)
+        )
+    ).all()
+    verification_counts = {str(state): int(count) for state, count in verification_rows}
 
     healthy_source_count = sum(
         1
@@ -321,6 +369,7 @@ async def get_workspace_overview(
         recent_sync_issues=sync_issue_summaries,
         latest_validation_run=latest_validation_run,
         review_required_count=review_required_count,
+        verification_counts=verification_counts,
     )
 
 

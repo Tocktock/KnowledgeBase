@@ -80,6 +80,7 @@ class StubSession:
 async def test_update_glossary_concept_approve_publishes_canonical_document(monkeypatch: pytest.MonkeyPatch) -> None:
     document = Document(
         id=uuid4(),
+        workspace_id=uuid4(),
         source_system="glossary",
         source_external_id="concept:draft",
         source_url="glossary://concept/test",
@@ -94,6 +95,7 @@ async def test_update_glossary_concept_approve_publishes_canonical_document(monk
     )
     concept = KnowledgeConcept(
         id=uuid4(),
+        workspace_id=document.workspace_id,
         normalized_term="센디 차량",
         display_term="센디 차량",
         aliases=["센디 차량"],
@@ -114,7 +116,8 @@ async def test_update_glossary_concept_approve_publishes_canonical_document(monk
     async def fake_get_concept_or_raise(_session: object, _concept_id: object) -> KnowledgeConcept:
         return concept
 
-    async def fake_get_glossary_concept_detail(_session: object, _concept_id: object):
+    async def fake_get_glossary_concept_detail(_session: object, _concept_id: object, *, workspace_id=None):
+        assert workspace_id == concept.workspace_id
         return SimpleNamespace(concept=SimpleNamespace(status=concept.status, canonical_document_id=concept.canonical_document_id))
 
     monkeypatch.setattr(glossary_service, "_get_concept_or_raise", fake_get_concept_or_raise)
@@ -136,6 +139,7 @@ async def test_update_glossary_concept_approve_publishes_canonical_document(monk
 async def test_update_glossary_concept_approve_requires_canonical_document(monkeypatch: pytest.MonkeyPatch) -> None:
     concept = KnowledgeConcept(
         id=uuid4(),
+        workspace_id=uuid4(),
         normalized_term="디비딥",
         display_term="디비딥",
         aliases=["디비딥"],
@@ -195,13 +199,14 @@ async def test_create_glossary_concept_request_creates_suggested_manual_request(
     assert created_detail.meta["request_source"] == "manual_request"
     assert created_detail.meta["manual_request_count"] == 1
     assert session.commit_calls == 1
-    assert session.flush_calls == 1
+    assert session.flush_calls == 2
 
 
 @pytest.mark.asyncio
 async def test_create_glossary_draft_uses_manual_request_fallback_when_no_support(monkeypatch: pytest.MonkeyPatch) -> None:
     concept = KnowledgeConcept(
         id=uuid4(),
+        workspace_id=uuid4(),
         normalized_term="신규 용어",
         display_term="신규 용어",
         aliases=["신규 용어", "신규 개념"],
@@ -238,16 +243,19 @@ async def test_create_glossary_draft_uses_manual_request_fallback_when_no_suppor
     async def fake_get_concept_or_raise(_session: object, _concept_id: object) -> KnowledgeConcept:
         return concept
 
-    async def fake_get_concept_support_hits(_session: object, _concept_id: object, *, limit: int):
+    async def fake_get_concept_support_hits(_session: object, _concept_id: object, *, workspace_id=None, limit: int):
+        assert workspace_id == concept.workspace_id
         assert limit == 8
         return []
 
-    async def fake_ingest_document(_session: object, payload: object):
+    async def fake_ingest_document(_session: object, payload: object, *, workspace_id):
+        assert workspace_id == concept.workspace_id
         nonlocal ingested_markdown
         ingested_markdown = payload.content
         return SimpleNamespace(document=SimpleNamespace(id=generated_document_id))
 
-    async def fake_get_glossary_concept_detail(_session: object, _concept_id: object):
+    async def fake_get_glossary_concept_detail(_session: object, _concept_id: object, *, workspace_id=None):
+        assert workspace_id == concept.workspace_id
         return SimpleNamespace(
             concept=SimpleNamespace(
                 id=concept.id,
@@ -287,6 +295,7 @@ async def test_list_glossary_concept_requests_for_user_filters_to_current_user_a
     now = datetime.now(timezone.utc)
     matching_concept = KnowledgeConcept(
         id=uuid4(),
+        workspace_id=workspace_id,
         normalized_term="신규 용어",
         display_term="신규 용어",
         aliases=["신규 용어"],
@@ -324,6 +333,7 @@ async def test_list_glossary_concept_requests_for_user_filters_to_current_user_a
     )
     other_concept = KnowledgeConcept(
         id=uuid4(),
+        workspace_id=other_workspace_id,
         normalized_term="다른 용어",
         display_term="다른 용어",
         aliases=["다른 용어"],

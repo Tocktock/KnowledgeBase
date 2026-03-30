@@ -2501,7 +2501,11 @@ async def _ingest_sync_items_for_resource(
                 },
                 priority=110,
             )
-            result = await ingest_document(session, payload)
+            result = await ingest_document(
+                session,
+                payload,
+                workspace_id=connection.workspace_id,
+            )
             status = ConnectorSourceItemStatus.unchanged.value if result.unchanged else ConnectorSourceItemStatus.imported.value
             counts["unchanged" if result.unchanged else "imported"] += 1
             await _upsert_source_item(

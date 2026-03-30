@@ -41,28 +41,38 @@ async def _get_document_by_slug(
     session: AsyncSession,
     slug: str,
     *,
+    workspace_id: UUID | None = None,
     exclude_id: UUID | None = None,
 ) -> Document | None:
     query = select(Document).where(Document.slug == slug)
+    if workspace_id is not None:
+        query = query.where(Document.workspace_id == workspace_id)
     if exclude_id is not None:
         query = query.where(Document.id != exclude_id)
     result = await session.execute(query)
     return result.scalar_one_or_none()
 
 
-async def _find_document(session: AsyncSession, payload: IngestDocumentRequest, resolved_slug: str) -> DocumentMatch:
+async def _find_document(
+    session: AsyncSession,
+    payload: IngestDocumentRequest,
+    resolved_slug: str,
+    *,
+    workspace_id: UUID | None = None,
+) -> DocumentMatch:
     if payload.source_external_id:
-        result = await session.execute(
-            select(Document).where(
-                Document.source_system == payload.source_system,
-                Document.source_external_id == payload.source_external_id,
-            )
-        )
+        filters = [
+            Document.source_system == payload.source_system,
+            Document.source_external_id == payload.source_external_id,
+        ]
+        if workspace_id is not None:
+            filters.append(Document.workspace_id == workspace_id)
+        result = await session.execute(select(Document).where(*filters))
         document = result.scalar_one_or_none()
         if document is not None:
             return DocumentMatch(document=document, matched_by="source_external_id")
 
-    document = await _get_document_by_slug(session, resolved_slug)
+    document = await _get_document_by_slug(session, resolved_slug, workspace_id=workspace_id)
     if document is not None:
         return DocumentMatch(document=document, matched_by="slug")
     return DocumentMatch(document=None, matched_by="none")
@@ -80,12 +90,14 @@ async def _upsert_document(
     *,
     payload: IngestDocumentRequest,
     resolved_slug: str,
+    workspace_id: UUID,
 ) -> Document:
-    match = await _find_document(session, payload, resolved_slug)
+    match = await _find_document(session, payload, resolved_slug, workspace_id=workspace_id)
     document = match.document
 
     if document is None:
         document = Document(
+            workspace_id=workspace_id,
             source_system=payload.source_system,
             source_external_id=payload.source_external_id,
             source_url=payload.source_url,
@@ -108,7 +120,12 @@ async def _upsert_document(
         raise SlugConflictError(document)
 
     if match.matched_by == "source_external_id" and document.slug != resolved_slug:
-        slug_owner = await _get_document_by_slug(session, resolved_slug, exclude_id=document.id)
+        slug_owner = await _get_document_by_slug(
+            session,
+            resolved_slug,
+            workspace_id=workspace_id,
+            exclude_id=document.id,
+        )
         if slug_owner is not None:
             raise SlugConflictError(slug_owner)
 
@@ -205,13 +222,19 @@ async def _maybe_enqueue_incremental_glossary_refresh(session: AsyncSession, doc
 
     await enqueue_glossary_refresh_job(
         session,
+        workspace_id=document.workspace_id,
         scope="incremental",
         target_document_id=document.id,
         priority=160,
     )
 
 
-async def ingest_document(session: AsyncSession, payload: IngestDocumentRequest) -> IngestResult:
+async def ingest_document(
+    session: AsyncSession,
+    payload: IngestDocumentRequest,
+    *,
+    workspace_id: UUID,
+) -> IngestResult:
     parser = DocumentParser()
     parsed = parser.parse(content_type=payload.content_type, content=payload.content)
 
@@ -219,7 +242,12 @@ async def ingest_document(session: AsyncSession, payload: IngestDocumentRequest)
     checksum = sha256_text(payload.content)
     content_hash = sha256_text(parsed.plain_text)
 
-    document = await _upsert_document(session, payload=payload, resolved_slug=resolved_slug)
+    document = await _upsert_document(
+        session,
+        payload=payload,
+        resolved_slug=resolved_slug,
+        workspace_id=workspace_id,
+    )
     current_revision = await _get_current_revision(session, document)
 
     if current_revision is not None and current_revision.checksum == checksum:
@@ -251,6 +279,7 @@ async def ingest_document(session: AsyncSession, payload: IngestDocumentRequest)
         document_id=document.id,
         revision_id=revision.id,
         markdown=parsed.markdown_text,
+        workspace_id=workspace_id,
     )
 
     document.current_revision_id = revision.id

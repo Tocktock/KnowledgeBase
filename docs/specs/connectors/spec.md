@@ -2,7 +2,7 @@
 
 ## Summary
 
-Connectors import workspace knowledge into a single searchable layer. Workspace sources are the primary path; personal sources remain secondary. Admin UX is template-first and hides raw connector implementation details by default.
+Connectors import workspace knowledge into a single searchable layer. Every connector write must resolve into the current workspace knowledge boundary instead of a global corpus. Workspace sources are the primary path; personal sources remain secondary. Admin UX is template-first and hides raw connector implementation details by default.
 
 ## Primary users
 
@@ -22,6 +22,7 @@ Connectors import workspace knowledge into a single searchable layer. Workspace 
 ## Current behavior
 
 - Supported providers are Google Drive, GitHub, and Notion.
+- Slack is not yet an active ingestion provider in this milestone.
 - Workspace sources are shared organizational sources.
 - Personal sources are user-owned and visually secondary.
 - Default workspace sync policy is `auto` every 60 minutes.
@@ -30,6 +31,9 @@ Connectors import workspace knowledge into a single searchable layer. Workspace 
   - Google Drive: shared drive, team folder
   - GitHub: repository docs, repository evidence
   - Notion: page, database, export upload
+- Reserved M2 Slack templates:
+  - `channel_evidence`
+  - `channel_summary`
 - Default UI hides raw `resource_kind`, `external_id`, and low-level metadata.
 - Advanced selection remains admin-only.
 - Login continuation always routes anonymous connector actions through `/login` and resumes the provider flow afterward.
@@ -52,6 +56,7 @@ Template intent:
 
 - `repository_docs` and standard Drive/Notion live sources feed member-visible knowledge.
 - `repository_evidence` and `export_upload` default to glossary evidence ingestion paths.
+- Future Slack ingestion defaults to `evidence_only`; only promoted summaries or curated outputs may become `member_visible`.
 
 ## Visibility model
 
@@ -59,6 +64,7 @@ Template intent:
 - `evidence_only` sources contribute to glossary validation and concept support, but stay hidden from normal member docs and search by default.
 - Notion export uploads default to `evidence_only`.
 - GitHub repository evidence sources default to `evidence_only`.
+- Workspace visibility is resolved server-side. Connector APIs do not accept a public `workspace_id` field for document or concept writes.
 
 ## Special source rules
 
@@ -67,6 +73,8 @@ Template intent:
 - The UI must keep upload snapshots on manual sync and disable direct “sync now” actions.
 - GitHub docs sync is docs-first. GitHub evidence sync uses text-based repository files for glossary support and excludes binaries and obvious generated or vendor trees by default.
 - Workspace-wide validation runs operate on active workspace resources, but snapshot uploads are counted as already-present evidence rather than re-synced live resources.
+- Connector-driven document writes must stamp the destination workspace from the owning connection or resource.
+- The same upstream external id may exist in more than one workspace without collision, but duplicates inside one workspace must still dedupe on source identity.
 
 ## Key workflows
 
@@ -111,6 +119,7 @@ Template intent:
 - GitHub v1 is docs-first plus glossary-evidence ingestion. It does not cover issues, PRs, or code search.
 - Notion export support is manual upload in v1, not automated export sync.
 - Connectors are a source-setup surface, not the place where glossary approval decisions are made.
+- Slack setup, routes, and UI are out of scope for this milestone. Only the provider abstractions and policy language are reserved now.
 
 ## Supporting docs
 

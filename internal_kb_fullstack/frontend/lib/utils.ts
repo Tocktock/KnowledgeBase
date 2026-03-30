@@ -148,6 +148,14 @@ const CONNECTOR_VISIBILITY_SCOPE_LABELS: Record<string, string> = {
   evidence_only: '검증 전용',
 }
 
+const VERIFICATION_STATE_LABELS: Record<string, string> = {
+  verified: '검증 완료',
+  monitoring: '모니터링 중',
+  drift_detected: '드리프트 감지',
+  evidence_insufficient: '근거 부족',
+  archived: '보관됨',
+}
+
 function formatMappedLabel(value: string | null | undefined, labels: Record<string, string>) {
   if (!value) return ''
   return labels[value] ?? value
@@ -255,6 +263,26 @@ export function formatConnectorItemStatusLabel(value?: string | null) {
 
 export function formatConnectorVisibilityScopeLabel(value?: string | null) {
   return formatMappedLabel(value, CONNECTOR_VISIBILITY_SCOPE_LABELS)
+}
+
+export function formatVerificationStateLabel(value?: string | null) {
+  return formatMappedLabel(value, VERIFICATION_STATE_LABELS)
+}
+
+export function getVerificationStateBadgeClass(value?: string | null) {
+  if (value === 'verified') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300'
+  }
+  if (value === 'monitoring') {
+    return 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300'
+  }
+  if (value === 'drift_detected') {
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300'
+  }
+  if (value === 'archived') {
+    return 'border-neutral-200 bg-neutral-100 text-neutral-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-300'
+  }
+  return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300'
 }
 
 export function formatOwnerTeamLabel(value?: string | null) {

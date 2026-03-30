@@ -2,7 +2,7 @@
 
 ## Summary
 
-The member-facing knowledge experience is built around trusted search and document browsing. Search and docs must surface provenance and freshness while keeping evidence-only corpus material out of normal member views.
+The member-facing knowledge experience is built around trusted search and document browsing. Search and docs must surface provenance and freshness while keeping evidence-only corpus material out of normal member views. All read-side retrieval must stay inside a single resolved workspace boundary so one workspace never leaks another workspace’s documents or glossary concepts.
 
 ## Primary users
 
@@ -26,6 +26,9 @@ The member-facing knowledge experience is built around trusted search and docume
 - Member-facing search and document lists must filter to `member_visible` content by default.
 - Evidence-only documents may support glossary validation internally, but they must not appear in normal docs lists or member-facing search result sets.
 - Search may resolve exact glossary concepts and surface canonical glossary pages ahead of generic evidence.
+- Read-side workspace resolution is server-side:
+  - authenticated viewers use their current workspace
+  - anonymous viewers and signed-in users without a current workspace fall back to the default workspace for public read surfaces
 
 ## Trust metadata
 
@@ -66,6 +69,7 @@ Search results, document detail, and concept-linked evidence share a normalized 
 - Anonymous users can access the read-only retrieval surfaces.
 - Member-visible filtering is the default on `/search`, `/docs`, and document detail navigation.
 - Evidence-only documents may be used internally for glossary support and validation, but they are not listed in default member browsing experiences.
+- Search, docs list, docs detail, backlinks, related documents, and concept grounding must all filter to the same resolved workspace.
 
 ## Important contracts owned by this spec
 

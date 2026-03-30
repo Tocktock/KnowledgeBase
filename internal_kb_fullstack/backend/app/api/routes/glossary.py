@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_authenticated_user
+from app.api.deps import get_authenticated_user, get_optional_authenticated_user
 from app.core.utils import utcnow
 from app.db.engine import get_db_session
 from app.db.models import GlossaryJob, GlossaryJobKind, GlossaryJobScope, JobStatus
@@ -27,6 +27,7 @@ from app.services.auth import AuthenticatedUser
 from app.services.glossary import (
     GlossaryError,
     GlossaryNotFoundError,
+    GlossaryVerificationError,
     create_glossary_concept_request,
     create_glossary_validation_run,
     create_or_regenerate_glossary_draft,
@@ -40,6 +41,7 @@ from app.services.glossary import (
     update_glossary_concept,
 )
 from app.services.document_drafts import DefinitionDraftConfigError, DefinitionDraftGenerationError
+from app.services.workspace import resolve_read_workspace_id
 
 router = APIRouter(prefix="/v1/glossary", tags=["glossary"])
 
@@ -66,7 +68,11 @@ async def refresh_glossary_route(
     auth_user: AuthenticatedUser = Depends(get_authenticated_user),
 ) -> JobSummary:
     _require_workspace_glossary_manager(auth_user)
-    job = await enqueue_glossary_refresh_job(session, scope=payload.scope)
+    job = await enqueue_glossary_refresh_job(
+        session,
+        workspace_id=auth_user.current_workspace_id,
+        scope=payload.scope,
+    )
     await session.commit()
     await session.refresh(job)
     return _glossary_job_summary(job)
@@ -169,9 +175,12 @@ async def list_glossary_route(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> GlossaryConceptListResponse:
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
     return await list_glossary_concepts(
         session,
+        workspace_id=workspace_id,
         q=q,
         status_filter=status_filter,
         concept_type=concept_type,
@@ -185,9 +194,11 @@ async def list_glossary_route(
 async def get_glossary_by_slug_route(
     slug: str,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> GlossaryConceptDetailResponse:
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
     try:
-        return await get_glossary_concept_by_slug(session, slug)
+        return await get_glossary_concept_by_slug(session, slug, workspace_id=workspace_id)
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -196,9 +207,11 @@ async def get_glossary_by_slug_route(
 async def get_glossary_concept_route(
     concept_id: UUID,
     session: AsyncSession = Depends(get_db_session),
+    auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> GlossaryConceptDetailResponse:
+    workspace_id = await resolve_read_workspace_id(session, auth_user)
     try:
-        return await get_glossary_concept_detail(session, concept_id)
+        return await get_glossary_concept_detail(session, concept_id, workspace_id=workspace_id)
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -215,6 +228,7 @@ async def create_glossary_draft_route(
         kind=GlossaryJobKind.draft.value,
         scope=GlossaryJobScope.incremental.value,
         status=JobStatus.processing.value,
+        workspace_id=auth_user.current_workspace_id,
         target_concept_id=concept_id,
         priority=60,
         attempt_count=1,
@@ -271,8 +285,15 @@ async def update_glossary_route(
 ) -> GlossaryConceptDetailResponse:
     _require_workspace_glossary_manager(auth_user)
     try:
-        return await update_glossary_concept(session, concept_id, payload)
+        return await update_glossary_concept(
+            session,
+            concept_id,
+            payload,
+            verified_by_user_id=auth_user.user.id,
+        )
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GlossaryVerificationError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except GlossaryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

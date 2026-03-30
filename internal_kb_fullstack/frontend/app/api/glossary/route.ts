@@ -4,7 +4,9 @@ import { getSessionToken, proxyJson, toNextJson } from '@/lib/api/proxy'
 
 export async function GET(request: NextRequest) {
   const { search } = request.nextUrl
-  const response = await proxyJson(`/v1/glossary${search}`)
+  const response = await proxyJson(`/v1/glossary${search}`, {
+    sessionToken: getSessionToken(request),
+  })
   return toNextJson(response)
 }
 

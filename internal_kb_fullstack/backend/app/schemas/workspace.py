@@ -87,3 +87,4 @@ class WorkspaceOverviewResponse(BaseModel):
     recent_sync_issues: list[JobSummary] = Field(default_factory=list)
     latest_validation_run: GlossaryValidationRunSummary | None = None
     review_required_count: int = 0
+    verification_counts: dict[str, int] = Field(default_factory=dict)

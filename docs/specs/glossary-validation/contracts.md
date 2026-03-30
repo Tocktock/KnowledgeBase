@@ -115,6 +115,7 @@ Canonical schema modules:
 - Important behavior:
   - when synced evidence exists, draft generation uses the support corpus
   - when the concept came from a manual request and no evidence exists yet, the system creates a fallback draft seeded from the request metadata so admins can continue the review path
+  - for already-approved concepts whose evidence drifted, this route refreshes the working draft without unpublishing the current canonical page
 
 ### `PATCH /v1/glossary/{concept_id}`
 
@@ -132,6 +133,11 @@ Canonical schema modules:
   - unknown concept
   - unsupported transition
   - invalid merge or split payload
+  - verification policy unsatisfied
+  - missing canonical glossary document
+- Important behavior:
+  - `approve` must fail unless the concept currently satisfies its assigned verification policy
+  - verification-policy failures return a structured 4xx detail with a machine-readable code and missing requirements
 
 ## Shared operational shapes
 
@@ -146,3 +152,17 @@ Important operational fields on concept summaries:
 - `last_validated_at`
 - `review_required`
 - `last_validation_run_id`
+- `verification_state`
+- `verification`
+
+Verification summary fields:
+
+- `status`
+- `policy_label`
+- `policy_version`
+- `evidence_bundle_hash`
+- `verified_at`
+- `due_at`
+- `last_checked_at`
+- `verified_by`
+- `reason`

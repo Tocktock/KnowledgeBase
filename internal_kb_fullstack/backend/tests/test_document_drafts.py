@@ -7,6 +7,7 @@ import pytest
 
 from app.schemas.documents import GenerateDefinitionDraftRequest
 from app.schemas.search import SearchHit, SearchResponse
+from app.schemas.trust import TrustSummary
 from app.services import document_drafts
 from app.services.document_drafts import (
     DefinitionDraftGenerationError,
@@ -46,6 +47,14 @@ def make_hit(
         vector_score=0.8,
         keyword_score=0.7,
         metadata={},
+        trust=TrustSummary(
+            source_label="Notion",
+            source_url=f"https://example.com/{slug}",
+            authority_kind="concept_evidence",
+            last_synced_at=None,
+            freshness_state="fresh",
+            evidence_count=1,
+        ),
     )
 
 

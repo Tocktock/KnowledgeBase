@@ -13,6 +13,7 @@ from app.db.models import Document, DocumentChunk, DocumentRevision, DocumentVis
 async def list_documents(
     session: AsyncSession,
     *,
+    workspace_id: UUID | None = None,
     q: str | None = None,
     owner_team: str | None = None,
     doc_types: Iterable[str] | None = None,
@@ -25,6 +26,8 @@ async def list_documents(
     normalized_doc_types = tuple(dict.fromkeys(doc_type for doc_type in (doc_types or []) if doc_type))
 
     filters = []
+    if workspace_id is not None:
+        filters.append(Document.workspace_id == workspace_id)
     if not include_evidence_only:
         filters.append(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
     if q:
@@ -90,8 +93,12 @@ async def get_document_by_slug(
     session: AsyncSession,
     *,
     slug: str,
+    workspace_id: UUID | None = None,
 ) -> tuple[Document | None, DocumentRevision | None]:
-    result = await session.execute(select(Document).where(Document.slug == slug))
+    stmt = select(Document).where(Document.slug == slug)
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
+    result = await session.execute(stmt)
     document = result.scalar_one_or_none()
     if document is None:
         return None, None
@@ -105,8 +112,13 @@ async def get_document_by_slug(
 async def get_document_detail(
     session: AsyncSession,
     document_id: UUID,
+    *,
+    workspace_id: UUID | None = None,
 ) -> tuple[Document | None, DocumentRevision | None, list[DocumentChunk]]:
-    document = await session.get(Document, document_id)
+    stmt = select(Document).where(Document.id == document_id)
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
+    document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
         return None, None, []
 
@@ -130,6 +142,7 @@ async def lookup_documents_by_slugs(
     session: AsyncSession,
     slugs: Iterable[str],
     *,
+    workspace_id: UUID | None = None,
     exclude_id: UUID | None = None,
 ) -> list[dict]:
     normalized = list(dict.fromkeys(slug.strip().lower() for slug in slugs if slug.strip()))
@@ -151,6 +164,8 @@ async def lookup_documents_by_slugs(
         .join(current_revision, current_revision.id == Document.current_revision_id)
         .where(Document.slug.in_(normalized))
     )
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
     if exclude_id is not None:
         stmt = stmt.where(Document.id != exclude_id)
 
@@ -161,6 +176,7 @@ async def lookup_documents_by_slugs(
 async def find_related_documents(
     session: AsyncSession,
     *,
+    workspace_id: UUID | None = None,
     title: str,
     owner_team: str | None,
     exclude_id: UUID,
@@ -192,5 +208,7 @@ async def find_related_documents(
         .order_by(score.desc(), Document.updated_at.desc())
         .limit(limit)
     )
+    if workspace_id is not None:
+        stmt = stmt.where(Document.workspace_id == workspace_id)
     rows = (await session.execute(stmt)).mappings().all()
     return [dict(row) for row in rows]

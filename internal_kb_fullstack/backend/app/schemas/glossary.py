@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.trust import TrustSummary
+from app.schemas.trust import TrustSummary, VerificationSummary
 
 
 class GlossaryConceptDocumentLink(BaseModel):
@@ -35,6 +35,8 @@ class GlossaryConceptSummary(BaseModel):
     last_validated_at: datetime | None = None
     review_required: bool = False
     last_validation_run_id: UUID | None = None
+    verification_state: str
+    verification: VerificationSummary
     owner_team_hint: str | None = None
     source_system_mix: list[str] = Field(default_factory=list)
     generated_document: GlossaryConceptDocumentLink | None = None
@@ -145,7 +147,7 @@ class GlossaryValidationRunListResponse(BaseModel):
 
 
 class GlossaryConceptUpdateRequest(BaseModel):
-    action: Literal["approve", "ignore", "mark_stale", "suggest", "merge", "split"]
+    action: Literal["approve", "ignore", "mark_stale", "suggest", "merge", "split", "archive"]
     canonical_document_id: UUID | None = None
     merge_into_concept_id: UUID | None = None
     split_aliases: list[str] = Field(default_factory=list)

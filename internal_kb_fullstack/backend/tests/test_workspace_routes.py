@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from app.api.deps import get_authenticated_user
 from app.api.routes import workspace as workspace_route
 from app.db.engine import get_db_session
-from app.db.models import ConnectorConnection, ConnectorResource, ConnectorSyncJob, GlossaryValidationRun
+from app.db.models import ConnectorConnection, ConnectorResource, ConnectorSyncJob, GlossaryValidationRun, KnowledgeConcept
 from app.main import app
 from app.schemas.workspace import (
     WorkspaceContextResponse,
@@ -70,12 +70,18 @@ class WorkspaceOverviewSession:
         if descriptions:
             entity = descriptions[0].get("entity")
             name = descriptions[0].get("name")
+            if name == "count":
+                return FakeScalarResult(0)
             if entity in {ConnectorConnection, ConnectorResource, ConnectorSyncJob}:
                 return FakeScalarsResult([])
             if entity is GlossaryValidationRun:
                 return FakeScalarResult(None)
-            if name == "count":
-                return FakeScalarResult(0)
+            if entity is KnowledgeConcept:
+                class RowResult:
+                    def all(self):
+                        return []
+
+                return RowResult()
         raise AssertionError(f"Unexpected statement: {statement!s}")
 
 
@@ -125,6 +131,7 @@ async def test_get_workspace_overview_route_supports_anonymous(monkeypatch: pyte
             featured_docs=[],
             featured_concepts=[],
             recent_sync_issues=[],
+            verification_counts={},
         )
 
     monkeypatch.setattr(workspace_route, "get_workspace_overview", fake_get_workspace_overview)
@@ -178,6 +185,30 @@ async def test_get_workspace_overview_keeps_signed_in_user_without_workspace_out
 
 
 @pytest.mark.asyncio
+async def test_resolve_read_workspace_id_falls_back_to_default_for_signed_in_user_without_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_user = AuthenticatedUser(
+        user=SimpleNamespace(id=uuid4(), email="member@example.com", name="Member", avatar_url=None),
+        roles=["member"],
+        current_workspace_id=None,
+        current_workspace_slug=None,
+        current_workspace_name=None,
+        current_workspace_role=None,
+    )
+    default_workspace_id = uuid4()
+
+    async def fake_get_default_workspace(_session):
+        return SimpleNamespace(id=default_workspace_id)
+
+    monkeypatch.setattr(workspace_service, "get_default_workspace", fake_get_default_workspace)
+
+    workspace_id = await workspace_service.resolve_read_workspace_id(object(), auth_user)
+
+    assert workspace_id == default_workspace_id
+
+
+@pytest.mark.asyncio
 async def test_get_workspace_overview_with_workspace_returns_role_aware_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -206,6 +237,7 @@ async def test_get_workspace_overview_with_workspace_returns_role_aware_summary(
     assert response.source_health.needs_attention_count == 0
     assert response.latest_validation_run is None
     assert response.review_required_count == 0
+    assert response.verification_counts == {}
     assert response.featured_docs == []
     assert response.featured_concepts == []
     assert response.recent_sync_issues == []

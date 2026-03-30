@@ -7,6 +7,18 @@ export type TrustSummary = {
   evidence_count: number
 }
 
+export type VerificationSummary = {
+  status: string
+  policy_label: string
+  policy_version: number
+  evidence_bundle_hash?: string | null
+  verified_at?: string | null
+  due_at?: string | null
+  last_checked_at?: string | null
+  verified_by?: string | null
+  reason?: string | null
+}
+
 export type DocumentSummary = {
   id: string
   source_system: string
@@ -192,6 +204,8 @@ export type GlossaryConceptSummary = {
   last_validated_at?: string | null
   review_required: boolean
   last_validation_run_id?: string | null
+  verification_state: string
+  verification: VerificationSummary
   owner_team_hint?: string | null
   source_system_mix: string[]
   generated_document?: GlossaryConceptDocumentLink | null
@@ -307,7 +321,7 @@ export type GlossaryDraftRequest = {
 }
 
 export type GlossaryConceptUpdateRequest = {
-  action: 'approve' | 'ignore' | 'mark_stale' | 'suggest' | 'merge' | 'split'
+  action: 'approve' | 'ignore' | 'mark_stale' | 'suggest' | 'merge' | 'split' | 'archive'
   canonical_document_id?: string | null
   merge_into_concept_id?: string | null
   split_aliases?: string[]
@@ -474,6 +488,7 @@ export type WorkspaceOverviewResponse = {
   recent_sync_issues: JobSummary[]
   latest_validation_run?: GlossaryValidationRunSummary | null
   review_required_count: number
+  verification_counts: Record<string, number>
 }
 
 export type WorkspaceMemberSummary = {

@@ -57,6 +57,7 @@ class ConceptStatus(str, enum.Enum):
     approved = "approved"
     ignored = "ignored"
     stale = "stale"
+    archived = "archived"
 
 
 class GlossaryValidationState(str, enum.Enum):
@@ -65,6 +66,14 @@ class GlossaryValidationState(str, enum.Enum):
     missing_draft = "missing_draft"
     stale_evidence = "stale_evidence"
     new_term = "new_term"
+
+
+class VerificationState(str, enum.Enum):
+    verified = "verified"
+    monitoring = "monitoring"
+    drift_detected = "drift_detected"
+    evidence_insufficient = "evidence_insufficient"
+    archived = "archived"
 
 
 class ConceptType(str, enum.Enum):
@@ -162,7 +171,7 @@ class ConnectorSyncJobKind(str, enum.Enum):
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
-        UniqueConstraint("source_system", "source_external_id", name="uq_documents_source_external"),
+        UniqueConstraint("workspace_id", "slug", name="uq_documents_workspace_slug"),
         ForeignKeyConstraint(
             ["id", "current_revision_id"],
             ["document_revisions.document_id", "document_revisions.id"],
@@ -173,6 +182,11 @@ class Document(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     source_system: Mapped[str] = mapped_column(String(50), nullable=False)
     source_external_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
@@ -562,11 +576,40 @@ class SchemaMigration(Base):
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class GlossaryVerificationPolicy(Base):
+    __tablename__ = "glossary_verification_policies"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "label", "version", name="uq_glossary_verification_policy_workspace_label_version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(Text(), nullable=False)
+    version: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="1")
+    min_support_docs: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="2")
+    freshness_sla_days: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="30")
+    min_durable_sources: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="1")
+    allow_evidence_only_support: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="true")
+    continuous_revalidation_enabled: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="true")
+    is_default: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class KnowledgeConcept(Base):
     __tablename__ = "knowledge_concepts"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
-    normalized_term: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    normalized_term: Mapped[str] = mapped_column(Text(), nullable=False)
     display_term: Mapped[str] = mapped_column(Text(), nullable=False)
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     language_code: Mapped[str] = mapped_column(String(12), nullable=False, server_default="ko")
@@ -589,6 +632,27 @@ class KnowledgeConcept(Base):
     )
     last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_required: Mapped[bool] = mapped_column(Boolean(), nullable=False, server_default="false")
+    verification_policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("glossary_verification_policies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    verification_state: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        server_default=VerificationState.evidence_insufficient.value,
+    )
+    verification_reason: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    verification_policy_version: Mapped[int | None] = mapped_column(Integer(), nullable=True)
+    evidence_bundle_hash: Mapped[str | None] = mapped_column(Text(), nullable=True)
     owner_team_hint: Mapped[str | None] = mapped_column(Text(), nullable=True)
     source_system_mix: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     generated_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
@@ -656,6 +720,11 @@ class GlossaryJob(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False)
     scope: Mapped[str] = mapped_column(String(20), nullable=False, server_default=GlossaryJobScope.full.value)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default=JobStatus.queued.value)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     target_concept_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("knowledge_concepts.id", ondelete="SET NULL"), nullable=True)
     target_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
     priority: Mapped[int] = mapped_column(Integer(), nullable=False, server_default="200")
@@ -684,7 +753,24 @@ Index("ix_connector_resources_visibility_scope", ConnectorResource.visibility_sc
 Index("ix_connector_source_items_document_id", ConnectorSourceItem.internal_document_id)
 Index("ix_connector_source_items_resource_status", ConnectorSourceItem.resource_id, ConnectorSourceItem.item_status)
 Index("ix_connector_sync_jobs_status_priority_requested", ConnectorSyncJob.status, ConnectorSyncJob.priority, ConnectorSyncJob.requested_at)
+Index("ix_documents_workspace_visibility", Document.workspace_id, Document.visibility_scope)
 Index("ix_documents_visibility_scope", Document.visibility_scope)
-Index("ix_knowledge_concepts_validation_state", KnowledgeConcept.validation_state, KnowledgeConcept.review_required)
+Index(
+    "uq_documents_workspace_source_external",
+    Document.workspace_id,
+    Document.source_system,
+    Document.source_external_id,
+    unique=True,
+    postgresql_where=Document.source_external_id.is_not(None),
+)
+Index(
+    "uq_knowledge_concepts_workspace_normalized_term",
+    KnowledgeConcept.workspace_id,
+    KnowledgeConcept.normalized_term,
+    unique=True,
+)
+Index("ix_glossary_verification_policies_workspace_default", GlossaryVerificationPolicy.workspace_id, GlossaryVerificationPolicy.is_default)
+Index("ix_knowledge_concepts_workspace_validation_state", KnowledgeConcept.workspace_id, KnowledgeConcept.validation_state, KnowledgeConcept.review_required)
+Index("ix_knowledge_concepts_verification_state", KnowledgeConcept.workspace_id, KnowledgeConcept.verification_state)
 Index("ix_glossary_validation_runs_workspace_requested", GlossaryValidationRun.workspace_id, GlossaryValidationRun.requested_at.desc())
 Index("ix_glossary_jobs_status_priority_requested", GlossaryJob.status, GlossaryJob.priority, GlossaryJob.requested_at)

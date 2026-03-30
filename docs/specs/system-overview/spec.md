@@ -2,7 +2,7 @@
 
 ## Summary
 
-KnowledgeHub is a workspace knowledge layer with a glossary-first administrative purpose. Members primarily search, browse docs, and consume concepts. Owners and admins connect sources, run validation, and keep glossary definitions trustworthy over time.
+KnowledgeHub is a workspace knowledge layer with a glossary-first administrative purpose. Members primarily search, browse docs, and consume concepts inside the current workspace boundary. Owners and admins connect sources, run verification, and keep glossary definitions trustworthy over time.
 
 ## Product map
 
@@ -50,15 +50,22 @@ KnowledgeHub is a workspace knowledge layer with a glossary-first administrative
   - editorial state of a concept
 - Validation state:
   - QA state describing whether the current evidence still supports the concept definition
+- Verification policy:
+  - workspace-scoped rules that define the minimum evidence, freshness, and durable-source requirements for a glossary concept to stay verifiable
+- Verification state:
+  - member-facing proof status for a glossary concept such as `verified`, `monitoring`, `drift_detected`, `evidence_insufficient`, or `archived`
+- Knowledge passport:
+  - the compact detail view that shows canonical output, supporting evidence, provenance, and backlinks for one glossary concept
 
 ## Cross-feature loop
 
 1. Admin connects sources.
 2. Source sync or snapshot upload creates or updates documents.
-3. Member-visible documents feed Search, Docs, and Concepts.
-4. Evidence-only documents feed glossary support and validation without polluting normal browsing.
-5. Admin runs validation.
-6. Changed evidence can keep the approved concept published while reopening QA with a fresh draft.
+3. Every ingested or manually-authored knowledge object is stored inside one workspace and is never shared across workspaces implicitly.
+4. Member-visible documents feed Search, Docs, and Concepts for that workspace.
+5. Evidence-only documents feed glossary support and verification without polluting normal browsing.
+6. Admin runs validation and verification against the current workspace policy.
+7. Changed evidence can keep the approved concept published while reopening QA with a fresh draft.
 
 ## Trust model
 
@@ -72,6 +79,18 @@ Shared user-facing trust fields:
 - `evidence_count`
 
 The trust model must be consistent across Search, Docs, and Concepts.
+
+Glossary surfaces add a second verification layer that must stay consistent across Home, Glossary, and Knowledge QA:
+
+- `status`
+- `policy_label`
+- `policy_version`
+- `evidence_bundle_hash`
+- `verified_at`
+- `due_at`
+- `last_checked_at`
+- `verified_by`
+- `reason`
 
 ## Frontend rendering contract
 
@@ -96,3 +115,4 @@ The trust model must be consistent across Search, Docs, and Concepts.
 
 - This overview defines the product map and shared vocabulary. It does not replace the feature-level specs.
 - Public contract detail belongs in the owning feature folders.
+- Slack ingestion is intentionally deferred in this milestone. The foundation work only reserves provider abstractions and evidence-first policy language so Slack can land without changing the workspace or verification model.

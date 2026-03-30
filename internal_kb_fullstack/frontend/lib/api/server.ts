@@ -1,3 +1,6 @@
+import { cookies } from 'next/headers'
+
+import { SESSION_COOKIE_NAME, SESSION_HEADER_NAME } from '@/lib/api/proxy'
 import {
   DocumentListResponse,
   DocumentRelationsResponse,
@@ -22,13 +25,19 @@ function encodeSlugPathSegment(slug: string) {
 }
 
 async function backendFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const cookieStore = await cookies()
+  const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value ?? null
+  const headers = new Headers(init?.headers)
+  if (!headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+  if (sessionToken && !headers.has(SESSION_HEADER_NAME)) {
+    headers.set(SESSION_HEADER_NAME, sessionToken)
+  }
   const response = await fetch(`${BACKEND_URL}${path}`, {
     ...init,
     cache: 'no-store',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
   })
 
   if (!response.ok) {

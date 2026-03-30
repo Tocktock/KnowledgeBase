@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+from uuid import UUID
 
 from sqlalchemy import case, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,9 +28,13 @@ def query_vector_sql(values: list[float], dimensions: int) -> str:
     return f"CAST('{vector_literal(values)}' AS vector({dimensions}))"
 
 
-def current_chunk_filters_sql(payload: SearchRequest) -> tuple[str, dict[str, str]]:
+def current_chunk_filters_sql(payload: SearchRequest, *, workspace_id: UUID | None = None) -> tuple[str, dict[str, str]]:
     filters: list[str] = []
     params: dict[str, str] = {}
+
+    if workspace_id is not None:
+        filters.append("AND d.workspace_id = :workspace_id")
+        params["workspace_id"] = str(workspace_id)
 
     if payload.doc_type is not None:
         filters.append("AND d.doc_type = :doc_type")
@@ -179,12 +184,17 @@ def _select_diverse_hits(hits: Iterable[SearchHit], *, limit: int, concept_docum
     return [ranked.hit for ranked in selected[:limit]]
 
 
-async def hybrid_search(session: AsyncSession, payload: SearchRequest) -> SearchResponse:
+async def hybrid_search(
+    session: AsyncSession,
+    payload: SearchRequest,
+    *,
+    workspace_id: UUID | None = None,
+) -> SearchResponse:
     settings = get_settings()
     embedding_service = get_embedding_service()
     query_embedding = await embedding_service.embed_one(payload.query)
     query_vector = query_vector_sql(query_embedding, settings.embedding_dimensions)
-    current_chunk_filters, filter_params = current_chunk_filters_sql(payload)
+    current_chunk_filters, filter_params = current_chunk_filters_sql(payload, workspace_id=workspace_id)
 
     sql = text(
         f"""
@@ -353,9 +363,13 @@ async def _fetch_canonical_glossary_hit(
     session: AsyncSession,
     *,
     concept: KnowledgeConcept,
+    workspace_id: UUID | None = None,
 ) -> SearchHit | None:
     if concept.canonical_document_id is None:
         return None
+    filters = [Document.id == concept.canonical_document_id]
+    if workspace_id is not None:
+        filters.append(Document.workspace_id == workspace_id)
 
     row = (
         await session.execute(
@@ -384,7 +398,7 @@ async def _fetch_canonical_glossary_hit(
                 literal(max(concept.support_doc_count, 1)).label("evidence_count"),
             )
             .join(DocumentChunk, DocumentChunk.revision_id == Document.current_revision_id)
-            .where(Document.id == concept.canonical_document_id)
+            .where(*filters)
             .order_by(
                 case(
                     (
@@ -444,30 +458,54 @@ async def _assemble_concept_hits(
     *,
     payload: SearchRequest,
     concept: KnowledgeConcept | None,
+    workspace_id: UUID | None = None,
 ) -> tuple[list[SearchHit], str | None]:
     if concept is None:
         return [], None
 
-    canonical_hit = await _fetch_canonical_glossary_hit(session, concept=concept)
-    support_rows = await get_concept_support_hits(
-        session,
-        concept.id,
-        limit=max(payload.limit * 4, 12),
-        owner_team=payload.owner_team,
-        doc_type=payload.doc_type,
-        source_system=payload.source_system,
-        include_evidence_only=False,
-    )
+    if workspace_id is None:
+        canonical_hit = await _fetch_canonical_glossary_hit(session, concept=concept)
+        support_rows = await get_concept_support_hits(
+            session,
+            concept.id,
+            limit=max(payload.limit * 4, 12),
+            owner_team=payload.owner_team,
+            doc_type=payload.doc_type,
+            source_system=payload.source_system,
+            include_evidence_only=False,
+        )
+    else:
+        canonical_hit = await _fetch_canonical_glossary_hit(session, concept=concept, workspace_id=workspace_id)
+        support_rows = await get_concept_support_hits(
+            session,
+            concept.id,
+            workspace_id=workspace_id,
+            limit=max(payload.limit * 4, 12),
+            owner_team=payload.owner_team,
+            doc_type=payload.doc_type,
+            source_system=payload.source_system,
+            include_evidence_only=False,
+        )
     support_hits = [_support_row_to_hit(row, concept=concept) for row in support_rows]
     hits = ([canonical_hit] if canonical_hit is not None else []) + support_hits
     canonical_slug = canonical_hit.document_slug if canonical_hit is not None else None
     return hits, canonical_slug
 
 
-async def search_documents(session: AsyncSession, payload: SearchRequest) -> SearchResponse:
-    raw_response = await hybrid_search(session, payload)
-    concept = await resolve_concept(session, payload.query)
-    concept_hits, _canonical_slug = await _assemble_concept_hits(session, payload=payload, concept=concept)
+async def search_documents(
+    session: AsyncSession,
+    payload: SearchRequest,
+    *,
+    workspace_id: UUID | None = None,
+) -> SearchResponse:
+    raw_response = await hybrid_search(session, payload, workspace_id=workspace_id)
+    concept = await resolve_concept(session, payload.query, workspace_id=workspace_id)
+    concept_hits, _canonical_slug = await _assemble_concept_hits(
+        session,
+        payload=payload,
+        concept=concept,
+        workspace_id=workspace_id,
+    )
     query_terms = _query_terms(payload.query)
     lexical_hits = [hit for hit in raw_response.hits if _is_lexically_relevant(hit, query_terms)]
     concept_document_ids = {str(hit.document_id) for hit in concept_hits}
@@ -496,10 +534,20 @@ async def search_documents(session: AsyncSession, payload: SearchRequest) -> Sea
     )
 
 
-async def explain_search(session: AsyncSession, payload: SearchRequest) -> SearchExplainResponse:
-    raw_response = await hybrid_search(session, payload)
-    concept = await resolve_concept(session, payload.query)
-    concept_hits, canonical_slug = await _assemble_concept_hits(session, payload=payload, concept=concept)
+async def explain_search(
+    session: AsyncSession,
+    payload: SearchRequest,
+    *,
+    workspace_id: UUID | None = None,
+) -> SearchExplainResponse:
+    raw_response = await hybrid_search(session, payload, workspace_id=workspace_id)
+    concept = await resolve_concept(session, payload.query, workspace_id=workspace_id)
+    concept_hits, canonical_slug = await _assemble_concept_hits(
+        session,
+        payload=payload,
+        concept=concept,
+        workspace_id=workspace_id,
+    )
     query_terms = _query_terms(payload.query)
     lexical_hits = [hit for hit in raw_response.hits if _is_lexically_relevant(hit, query_terms)]
     concept_document_ids = {str(hit.document_id) for hit in concept_hits}
