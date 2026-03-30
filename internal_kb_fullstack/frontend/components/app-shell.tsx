@@ -204,11 +204,16 @@ function AccountDropdown({
             최근 로그인 {formatDate(user.last_login_at)}
           </div>
 
-          <div className="mt-4 flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => window.location.assign('/connectors')}>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="whitespace-nowrap"
+              onClick={() => window.location.assign('/connectors')}
+            >
               연결 소스
             </Button>
-            <Button size="sm" variant="ghost" onClick={onLogout} disabled={loggingOut}>
+            <Button size="sm" variant="ghost" className="whitespace-nowrap" onClick={onLogout} disabled={loggingOut}>
               <LogOut className="size-4" />
               로그아웃
             </Button>

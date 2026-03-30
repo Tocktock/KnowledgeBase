@@ -43,6 +43,7 @@ The product is framed as a workspace knowledge layer. Navigation and home behavi
 
 - The global shell must keep navigation, recent documents, account controls, and theme controls visible without overlap across desktop and mobile widths.
 - Long names, emails, and document titles in the shell must truncate or wrap safely.
+- Compact account-menu action rows must keep each button label on a single line and wrap whole buttons between lines before button text breaks internally.
 - The mobile sidebar must be dismissible with an overlay and must not leave partially visible controls behind the drawer.
 
 ## Home behavior
