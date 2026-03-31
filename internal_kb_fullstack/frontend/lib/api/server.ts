@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers'
 
 import { SESSION_COOKIE_NAME, SESSION_HEADER_NAME } from '@/lib/api/proxy'
+import { encodePathSegment } from '@/lib/path-segments'
 import {
   DocumentListResponse,
   DocumentRelationsResponse,
@@ -14,15 +15,6 @@ import {
 } from '@/lib/types'
 
 const BACKEND_URL = process.env.KB_BACKEND_URL ?? 'http://localhost:8000'
-
-function encodeSlugPathSegment(slug: string) {
-  try {
-    // Next page params can arrive already URL-encoded for non-ASCII segments.
-    return encodeURIComponent(decodeURIComponent(slug))
-  } catch {
-    return encodeURIComponent(slug)
-  }
-}
 
 async function backendFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const cookieStore = await cookies()
@@ -53,7 +45,7 @@ export async function getRecentDocuments(limit = 12) {
 }
 
 export async function getDocumentBySlug(slug: string) {
-  return backendFetch<DocumentViewResponse>(`/v1/documents/slug/${encodeSlugPathSegment(slug)}`)
+  return backendFetch<DocumentViewResponse>(`/v1/documents/slug/${encodePathSegment(slug)}`)
 }
 
 export async function getDocumentRelations(documentId: string, limit = 8) {
@@ -98,5 +90,5 @@ export async function getGlossaryConcepts(params?: {
 }
 
 export async function getGlossaryConceptBySlug(slug: string) {
-  return backendFetch<GlossaryConceptDetailResponse>(`/v1/glossary/slug/${encodeSlugPathSegment(slug)}`)
+  return backendFetch<GlossaryConceptDetailResponse>(`/v1/glossary/slug/${encodePathSegment(slug)}`)
 }

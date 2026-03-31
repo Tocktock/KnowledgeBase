@@ -5,6 +5,7 @@ import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getGlossaryConceptBySlug } from '@/lib/api/server'
+import { decodePathSegment } from '@/lib/path-segments'
 import {
   formatConceptTypeLabel,
   formatDate,
@@ -18,9 +19,10 @@ import {
 
 export default async function GlossaryDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
-  const detail = await getGlossaryConceptBySlug(slug).catch(() => null)
+  const requestedSlug = decodePathSegment(slug)
+  const detail = await getGlossaryConceptBySlug(requestedSlug).catch(() => null)
   if (detail === null) notFound()
-  if (detail.concept.slug !== slug) {
+  if (detail.concept.slug !== requestedSlug) {
     redirect(`/glossary/${detail.concept.slug}`)
   }
 
