@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS documents (
   source_system text NOT NULL,
   source_external_id text,
   source_url text,
-  slug text NOT NULL UNIQUE,
+  slug text NOT NULL,
   title text NOT NULL,
   language_code varchar(12) NOT NULL DEFAULT 'ko',
   doc_type varchar(50) NOT NULL DEFAULT 'knowledge',

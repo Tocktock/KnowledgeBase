@@ -22,6 +22,7 @@ Canonical schema modules:
 - Important states:
   - authenticated users are redirected away when the login task is already satisfied
   - invite token and reset token change the copy and action blocks shown on the page
+  - `return_to` is sanitized to an internal path before client-side navigation continues
 
 ### `GET /invite/[token]`
 
@@ -44,6 +45,9 @@ Canonical schema modules:
   - `owner_scope`
   - `provider`
 - Response model: `OAuthStartResponse`
+- Important behavior:
+  - `return_to` accepts only internal application paths
+  - invalid or external values are normalized to the default post-auth location
 - Important error states:
   - provider misconfiguration
   - invalid or disallowed callback state
@@ -55,6 +59,8 @@ Canonical schema modules:
 - Query parameters:
   - provider callback code/state payload
 - Response model: `AuthCallbackResponse`
+- Important behavior:
+  - callback responses return a normalized internal `redirect_to`
 - Important error states:
   - invalid callback state
   - OAuth exchange failure
@@ -66,6 +72,8 @@ Canonical schema modules:
 - Caller: anonymous user.
 - Request model: `PasswordLoginRequest`
 - Response model: `AuthSessionResponse`
+- Important behavior:
+  - `return_to` is normalized to an internal path before it is echoed back as `redirect_to`
 - Important error states:
   - wrong password
   - Google-only account without a password
@@ -86,6 +94,8 @@ Canonical schema modules:
 - Caller: anonymous invited user.
 - Request model: `PasswordInviteSignupRequest`
 - Response model: `AuthSessionResponse`
+- Important behavior:
+  - continuation fields are normalized to internal paths before session completion
 - Important error states:
   - invalid, expired, or already accepted invite
   - email mismatch between the invite and the requested signup
@@ -128,6 +138,8 @@ Canonical schema modules:
   - `password`
   - optional continuation fields mirrored from login
 - Response model: `AuthSessionResponse`
+- Important behavior:
+  - optional continuation fields are normalized to internal paths before the reset flow completes
 - Important error states:
   - invalid or expired token
   - password policy violation

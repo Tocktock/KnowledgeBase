@@ -34,13 +34,16 @@ KnowledgeHub uses workspace-first authentication and membership. Users sign in t
 - Google login callback returns the same session payload contract as password login and must not fail on response-model conversion.
 - When `google_oauth_redirect_uri` is configured, Google app login uses that callback URI for both the authorization redirect and the token exchange. Otherwise it falls back to `app_public_url + /api/auth/google/callback`.
 - Invite-preview and password-reset preview failures rendered on `/login` must show normalized user-facing copy instead of raw backend JSON payload text.
+- Auth continuation targets (`return_to`) are normalized to internal application paths only.
+- Valid continuation paths must start with a single `/` and may retain query strings or fragments.
+- External URLs, protocol-relative targets, backslash variants, and malformed continuation values fall back to the safe default route for the active auth flow.
 
 ## Key workflows
 
 - Normal sign-in:
   - the user reaches `/login`
   - the page supports Google OAuth and password login on the same surface
-  - on success the user receives a server session and returns to `return_to`
+  - on success the user receives a server session and returns to the normalized internal `return_to` target
 - Invite-driven account creation:
   - `/invite/[token]` accepts the invite immediately if the user already has a session
   - otherwise it redirects the user to `/login?invite_token=...`

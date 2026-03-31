@@ -1,3 +1,19 @@
+---
+date: 2026-03-30
+feature: system-overview
+type: intent
+related_specs:
+  - /docs/specs/system-overview/spec.md
+  - /docs/specs/connectors/spec.md
+  - /docs/specs/search-and-docs/spec.md
+  - /docs/specs/concepts/spec.md
+  - /docs/specs/glossary-validation/spec.md
+related_decisions:
+  - /docs/decisions/0001-canonical-write-boundary.md
+  - /docs/decisions/0005-workspace-data-connectors.md
+status: active
+---
+
 # Intent: Workspace-Scoped Verified Knowledge Foundation
 
 ## Context

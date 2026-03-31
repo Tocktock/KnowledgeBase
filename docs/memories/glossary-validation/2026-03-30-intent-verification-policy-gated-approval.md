@@ -1,3 +1,14 @@
+---
+date: 2026-03-30
+feature: glossary-validation
+type: intent
+related_specs:
+  - /docs/specs/glossary-validation/spec.md
+  - /docs/specs/glossary-validation/contracts.md
+related_decisions: []
+status: active
+---
+
 # Intent: Verification Policy-Gated Glossary Approval
 
 ## Context

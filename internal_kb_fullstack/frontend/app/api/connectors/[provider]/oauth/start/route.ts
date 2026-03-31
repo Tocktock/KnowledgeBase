@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 import type { OAuthStartResponse } from '@/lib/types'
 import { getSessionToken, proxyJson } from '@/lib/api/proxy'
+import { coerceInternalPath } from '@/lib/internal-paths'
 
 function appUrl(request: NextRequest, path: string) {
   const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? 'localhost:3000'
@@ -16,7 +17,7 @@ export async function GET(
   const { provider } = await params
   const sessionToken = getSessionToken(request)
   const scope = request.nextUrl.searchParams.get('scope') ?? 'workspace'
-  const returnTo = request.nextUrl.searchParams.get('return_to') ?? '/connectors'
+  const returnTo = coerceInternalPath(request.nextUrl.searchParams.get('return_to'), '/connectors')
   if (!sessionToken) {
     const search = new URLSearchParams({
       return_to: returnTo,

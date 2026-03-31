@@ -27,6 +27,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
+For `APP_ENV=staging` or `APP_ENV=production`, set both `CONNECTOR_TOKEN_ENCRYPTION_KEY` and `SESSION_ENCRYPTION_KEY` in `internal_kb_fullstack/.env` before starting the stack.
+
 Local endpoints:
 
 - frontend: `http://localhost:3000`

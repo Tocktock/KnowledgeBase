@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS knowledge_concepts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  normalized_term text NOT NULL UNIQUE,
+  normalized_term text NOT NULL,
+  public_slug text,
   display_term text NOT NULL,
   aliases jsonb NOT NULL DEFAULT '[]'::jsonb,
   language_code varchar(12) NOT NULL DEFAULT 'ko',

@@ -25,6 +25,9 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
 - `/glossary` links to a dedicated request page instead of embedding the intake form directly in the approved-concepts list.
 - Signed-in workspace members can submit a new concept request and review their own request history from `/glossary/requests` when the term does not exist yet.
 - Concept requests do not publish immediately. They create or update a suggested concept candidate that admins review in Knowledge QA.
+- Each concept owns a stored workspace-scoped `public_slug`.
+- Member-facing concept routes use the stored `public_slug` as the canonical URL key and do not re-derive identity from `display_term`.
+- Legacy display-term slug lookups may still resolve when they match exactly one concept, but the UI redirects to the canonical stored slug.
 - Concept detail exposes:
   - lifecycle status where relevant to the view
   - support evidence
@@ -32,6 +35,8 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
   - related concepts
   - trust and source information for supporting evidence
 - Evidence-only sources can contribute support evidence, but the concept surface is still a member-facing read surface rather than an operational dashboard.
+- Member and anonymous concept detail views include only support rows backed by `member_visible` documents.
+- Current-workspace owners and admins may see evidence-only support rows on direct concept detail reads so review links keep working without a separate admin-only concept route.
 
 ## Key workflows
 
@@ -55,6 +60,7 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
 - The Concepts surface does not expose the full mutation and review toolset.
 - Request submission requires authentication plus an active workspace membership.
 - Validation state may influence what support context is shown, but the operational actions remain owned by the glossary-validation feature.
+- Canonical concept URLs stay stable when `display_term` changes because `public_slug` is persisted independently of the current label.
 
 ## Important contracts owned by this spec
 

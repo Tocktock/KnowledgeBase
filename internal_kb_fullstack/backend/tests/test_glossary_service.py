@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections import deque
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -11,8 +12,12 @@ from app.schemas.glossary import GlossaryConceptRequestCreateRequest, GlossaryCo
 from app.services import glossary as glossary_service
 from app.services.glossary import (
     GlossaryError,
+    GlossaryNotFoundError,
+    allocate_concept_public_slug,
+    concept_public_slug,
     create_glossary_concept_request,
     create_or_regenerate_glossary_draft,
+    get_glossary_concept_by_slug,
     list_glossary_concept_requests_for_user,
     update_glossary_concept,
 )
@@ -55,9 +60,15 @@ class StubSession:
 
     async def execute(self, _stmt: object):
         concepts = list(self.concepts)
+        descriptions = getattr(_stmt, "column_descriptions", None) or []
+        selected_values: list[object] = concepts
+        if descriptions:
+            expr = descriptions[0].get("expr")
+            if getattr(expr, "key", None) == "public_slug":
+                selected_values = [concept.public_slug for concept in concepts if getattr(concept, "public_slug", None)]
 
         class Result:
-            def __init__(self, values: list[KnowledgeConcept]) -> None:
+            def __init__(self, values: list[object]) -> None:
                 self.values = values
 
             def scalar_one_or_none(self) -> None:
@@ -65,15 +76,43 @@ class StubSession:
 
             def scalars(self):
                 class Scalars:
-                    def __init__(self, values: list[KnowledgeConcept]) -> None:
+                    def __init__(self, values: list[object]) -> None:
                         self.values = values
 
-                    def all(self) -> list[KnowledgeConcept]:
+                    def all(self) -> list[object]:
                         return self.values
 
                 return Scalars(self.values)
 
-        return Result(concepts)
+        return Result(selected_values)
+
+
+class SequentialResult:
+    def __init__(self, *, one=None, many: list[KnowledgeConcept] | None = None) -> None:
+        self.one = one
+        self.many = many or []
+
+    def scalar_one_or_none(self):
+        return self.one
+
+    def scalars(self):
+        class Scalars:
+            def __init__(self, values: list[KnowledgeConcept]) -> None:
+                self.values = values
+
+            def all(self) -> list[KnowledgeConcept]:
+                return self.values
+
+        return Scalars(self.many)
+
+
+class SequentialSession:
+    def __init__(self, results: list[SequentialResult]) -> None:
+        self.results = deque(results)
+
+    async def execute(self, _statement: object):
+        assert self.results, "Unexpected execute call"
+        return self.results.popleft()
 
 
 @pytest.mark.asyncio
@@ -116,8 +155,15 @@ async def test_update_glossary_concept_approve_publishes_canonical_document(monk
     async def fake_get_concept_or_raise(_session: object, _concept_id: object) -> KnowledgeConcept:
         return concept
 
-    async def fake_get_glossary_concept_detail(_session: object, _concept_id: object, *, workspace_id=None):
+    async def fake_get_glossary_concept_detail(
+        _session: object,
+        _concept_id: object,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
         assert workspace_id == concept.workspace_id
+        assert include_evidence_only_support is False
         return SimpleNamespace(concept=SimpleNamespace(status=concept.status, canonical_document_id=concept.canonical_document_id))
 
     monkeypatch.setattr(glossary_service, "_get_concept_or_raise", fake_get_concept_or_raise)
@@ -171,10 +217,16 @@ async def test_create_glossary_concept_request_creates_suggested_manual_request(
     session = StubSession()
     created_detail = None
 
-    async def fake_get_glossary_concept_detail(_session: object, concept_id: object):
+    async def fake_get_glossary_concept_detail(
+        _session: object,
+        concept_id: object,
+        *,
+        include_evidence_only_support: bool = False,
+    ):
         nonlocal created_detail
         created = next(concept for concept in session.concepts if concept.id == concept_id)
         created_detail = created
+        assert include_evidence_only_support is False
         return SimpleNamespace(concept=glossary_service._concept_summary(created, {}))
 
     monkeypatch.setattr(glossary_service, "get_glossary_concept_detail", fake_get_glossary_concept_detail)
@@ -199,7 +251,7 @@ async def test_create_glossary_concept_request_creates_suggested_manual_request(
     assert created_detail.meta["request_source"] == "manual_request"
     assert created_detail.meta["manual_request_count"] == 1
     assert session.commit_calls == 1
-    assert session.flush_calls == 2
+    assert session.flush_calls == 1
 
 
 @pytest.mark.asyncio
@@ -254,8 +306,15 @@ async def test_create_glossary_draft_uses_manual_request_fallback_when_no_suppor
         ingested_markdown = payload.content
         return SimpleNamespace(document=SimpleNamespace(id=generated_document_id))
 
-    async def fake_get_glossary_concept_detail(_session: object, _concept_id: object, *, workspace_id=None):
+    async def fake_get_glossary_concept_detail(
+        _session: object,
+        _concept_id: object,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
         assert workspace_id == concept.workspace_id
+        assert include_evidence_only_support is False
         return SimpleNamespace(
             concept=SimpleNamespace(
                 id=concept.id,
@@ -380,3 +439,148 @@ async def test_list_glossary_concept_requests_for_user_filters_to_current_user_a
     assert response.items[0].concept.display_term == "신규 용어"
     assert response.items[0].request_count == 2
     assert response.items[0].latest_request.request_note == "추가 문맥입니다."
+
+
+def test_allocate_concept_public_slug_uses_id_suffix_for_collisions() -> None:
+    first_id = uuid4()
+    second_id = uuid4()
+    reserved: set[str] = set()
+
+    first = allocate_concept_public_slug("센디 차량", existing_slugs=reserved, concept_id=first_id)
+    second = allocate_concept_public_slug("센디 차량", existing_slugs=reserved, concept_id=second_id)
+
+    assert first == "센디-차량"
+    assert second == f"센디-차량-{str(second_id).split('-', 1)[0]}"
+
+
+@pytest.mark.asyncio
+async def test_get_glossary_concept_by_slug_prefers_public_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_id = uuid4()
+    concept = KnowledgeConcept(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        normalized_term="센디 차량",
+        public_slug="stable-slug",
+        display_term="센디 차량",
+        aliases=["센디 차량"],
+        language_code="ko",
+        concept_type="product",
+        confidence_score=0.9,
+        support_doc_count=2,
+        support_chunk_count=3,
+        status=ConceptStatus.approved.value,
+        meta={},
+    )
+    session = SequentialSession([SequentialResult(one=concept)])
+
+    async def fake_get_glossary_concept_detail(
+        _session: object,
+        concept_id: object,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
+        assert concept_id == concept.id
+        assert workspace_id == concept.workspace_id
+        assert include_evidence_only_support is True
+        return SimpleNamespace(concept=SimpleNamespace(id=concept.id, slug=concept_public_slug(concept)))
+
+    monkeypatch.setattr(glossary_service, "get_glossary_concept_detail", fake_get_glossary_concept_detail)
+
+    detail = await get_glossary_concept_by_slug(
+        session,
+        "stable-slug",
+        workspace_id=workspace_id,
+        include_evidence_only_support=True,
+    )
+
+    assert detail.concept.slug == "stable-slug"
+
+
+@pytest.mark.asyncio
+async def test_get_glossary_concept_by_slug_falls_back_to_unique_legacy_slug(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_id = uuid4()
+    concept = KnowledgeConcept(
+        id=uuid4(),
+        workspace_id=workspace_id,
+        normalized_term="센디 차량",
+        public_slug="stable-slug",
+        display_term="센디 차량",
+        aliases=["센디 차량"],
+        language_code="ko",
+        concept_type="product",
+        confidence_score=0.9,
+        support_doc_count=2,
+        support_chunk_count=3,
+        status=ConceptStatus.approved.value,
+        meta={},
+    )
+    session = SequentialSession(
+        [
+            SequentialResult(one=None),
+            SequentialResult(many=[concept]),
+        ]
+    )
+
+    async def fake_get_glossary_concept_detail(
+        _session: object,
+        concept_id: object,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
+        assert concept_id == concept.id
+        assert workspace_id == concept.workspace_id
+        return SimpleNamespace(concept=SimpleNamespace(id=concept.id, slug=concept_public_slug(concept)))
+
+    monkeypatch.setattr(glossary_service, "get_glossary_concept_detail", fake_get_glossary_concept_detail)
+
+    detail = await get_glossary_concept_by_slug(session, "센디-차량", workspace_id=workspace_id)
+
+    assert detail.concept.slug == "stable-slug"
+
+
+@pytest.mark.asyncio
+async def test_get_glossary_concept_by_slug_rejects_ambiguous_legacy_slug() -> None:
+    workspace_id = uuid4()
+    concepts = [
+        KnowledgeConcept(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            normalized_term="센디 차량",
+            public_slug="stable-slug-a",
+            display_term="센디 차량",
+            aliases=["센디 차량"],
+            language_code="ko",
+            concept_type="product",
+            confidence_score=0.9,
+            support_doc_count=2,
+            support_chunk_count=3,
+            status=ConceptStatus.approved.value,
+            meta={},
+        ),
+        KnowledgeConcept(
+            id=uuid4(),
+            workspace_id=workspace_id,
+            normalized_term="센디 차량 b",
+            public_slug="stable-slug-b",
+            display_term="센디 차량",
+            aliases=["센디 차량"],
+            language_code="ko",
+            concept_type="product",
+            confidence_score=0.8,
+            support_doc_count=2,
+            support_chunk_count=3,
+            status=ConceptStatus.drafted.value,
+            meta={},
+        ),
+    ]
+    session = SequentialSession(
+        [
+            SequentialResult(one=None),
+            SequentialResult(many=concepts),
+        ]
+    )
+
+    with pytest.raises(GlossaryNotFoundError, match="Glossary concept not found"):
+        await get_glossary_concept_by_slug(session, "센디-차량", workspace_id=workspace_id)

@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.redirects import normalize_local_redirect_target
 from app.core.security import (
     create_code_challenge,
     future_utc,
@@ -110,9 +111,7 @@ def _google_login_redirect_uri() -> str:
 
 
 def _safe_return_path(value: str | None) -> str:
-    if not value or not value.startswith("/"):
-        return "/connectors"
-    return value
+    return normalize_local_redirect_target(value, default_path="/connectors")
 
 
 def _normalize_email(value: str) -> str:

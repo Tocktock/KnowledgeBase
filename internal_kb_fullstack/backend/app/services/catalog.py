@@ -94,10 +94,13 @@ async def get_document_by_slug(
     *,
     slug: str,
     workspace_id: UUID | None = None,
+    include_evidence_only: bool = False,
 ) -> tuple[Document | None, DocumentRevision | None]:
     stmt = select(Document).where(Document.slug == slug)
     if workspace_id is not None:
         stmt = stmt.where(Document.workspace_id == workspace_id)
+    if not include_evidence_only:
+        stmt = stmt.where(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
     result = await session.execute(stmt)
     document = result.scalar_one_or_none()
     if document is None:
@@ -114,10 +117,13 @@ async def get_document_detail(
     document_id: UUID,
     *,
     workspace_id: UUID | None = None,
+    include_evidence_only: bool = False,
 ) -> tuple[Document | None, DocumentRevision | None, list[DocumentChunk]]:
     stmt = select(Document).where(Document.id == document_id)
     if workspace_id is not None:
         stmt = stmt.where(Document.workspace_id == workspace_id)
+    if not include_evidence_only:
+        stmt = stmt.where(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
     document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
         return None, None, []
@@ -144,6 +150,7 @@ async def lookup_documents_by_slugs(
     *,
     workspace_id: UUID | None = None,
     exclude_id: UUID | None = None,
+    include_evidence_only: bool = False,
 ) -> list[dict]:
     normalized = list(dict.fromkeys(slug.strip().lower() for slug in slugs if slug.strip()))
     if not normalized:
@@ -168,6 +175,8 @@ async def lookup_documents_by_slugs(
         stmt = stmt.where(Document.workspace_id == workspace_id)
     if exclude_id is not None:
         stmt = stmt.where(Document.id != exclude_id)
+    if not include_evidence_only:
+        stmt = stmt.where(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
 
     rows = (await session.execute(stmt.order_by(ordering.asc(), Document.updated_at.desc()))).mappings().all()
     return [dict(row) for row in rows]
@@ -181,6 +190,7 @@ async def find_related_documents(
     owner_team: str | None,
     exclude_id: UUID,
     limit: int,
+    include_evidence_only: bool = False,
 ) -> list[dict]:
     current_revision = aliased(DocumentRevision)
     score = func.similarity(Document.title, title) + case(
@@ -203,12 +213,13 @@ async def find_related_documents(
         .where(
             Document.id != exclude_id,
             Document.status == "published",
-            Document.visibility_scope == DocumentVisibilityScope.member_visible.value,
         )
         .order_by(score.desc(), Document.updated_at.desc())
         .limit(limit)
     )
     if workspace_id is not None:
         stmt = stmt.where(Document.workspace_id == workspace_id)
+    if not include_evidence_only:
+        stmt = stmt.where(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
     rows = (await session.execute(stmt)).mappings().all()
     return [dict(row) for row in rows]

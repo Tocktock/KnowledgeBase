@@ -23,7 +23,7 @@ from app.services.document_drafts import (  # noqa: E402
     generate_definition_draft,
     validate_generated_body,
 )
-from app.services.glossary import concept_search_key, concept_slug, refresh_glossary_concepts, resolve_concept  # noqa: E402
+from app.services.glossary import concept_public_slug, concept_search_key, refresh_glossary_concepts, resolve_concept  # noqa: E402
 from app.services.search import search_documents  # noqa: E402
 
 
@@ -68,9 +68,9 @@ async def _evaluate_search_case(session, case: dict[str, Any]) -> CaseOutcome:
     if concept is None:
         failures.append("No concept resolved for query.")
     else:
-        if concept_slug(concept.display_term) != case["expected_concept_slug"]:
+        if concept_public_slug(concept) != case["expected_concept_slug"]:
             failures.append(
-                f"Resolved concept slug {concept_slug(concept.display_term)!r} did not match expected {case['expected_concept_slug']!r}."
+                f"Resolved concept slug {concept_public_slug(concept)!r} did not match expected {case['expected_concept_slug']!r}."
             )
 
     if case.get("require_grounded") and response.weak_grounding:

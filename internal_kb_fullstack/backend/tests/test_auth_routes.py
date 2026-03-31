@@ -406,3 +406,16 @@ async def test_complete_google_login_returns_callback_response_without_validatio
     }
     assert session.committed is True
     assert session.deleted_state_id == state_row.id
+
+
+@pytest.mark.parametrize(
+    ("return_path", "expected"),
+    [
+        ("//evil.example/path", "/connectors"),
+        ("https://evil.example/path", "/connectors"),
+        ("/search?query=glossary#details", "/search?query=glossary#details"),
+        (None, "/connectors"),
+    ],
+)
+def test_build_post_auth_redirect_normalizes_return_targets(return_path: str | None, expected: str) -> None:
+    assert auth_service._build_post_auth_redirect(return_path=return_path) == expected

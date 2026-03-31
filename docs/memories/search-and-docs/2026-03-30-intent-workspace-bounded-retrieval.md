@@ -1,3 +1,16 @@
+---
+date: 2026-03-30
+feature: search-and-docs
+type: intent
+related_specs:
+  - /docs/specs/search-and-docs/spec.md
+  - /docs/specs/search-and-docs/contracts.md
+related_decisions:
+  - /docs/decisions/0001-canonical-write-boundary.md
+  - /docs/decisions/0003-document-links-are-a-projection.md
+status: active
+---
+
 # Intent: Workspace-Bounded Retrieval
 
 ## Context

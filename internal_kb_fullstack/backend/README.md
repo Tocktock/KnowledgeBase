@@ -39,7 +39,8 @@ This backend is optimized for internal docs rather than generic CMS records:
 
 1. Copy `.env.example` to `.env`.
 2. Set `EMBEDDING_API_KEY`.
-3. Start the stack:
+3. For `APP_ENV=staging` or `APP_ENV=production`, set both `CONNECTOR_TOKEN_ENCRYPTION_KEY` and `SESSION_ENCRYPTION_KEY` explicitly.
+4. Start the stack:
 
 ```bash
 docker compose up --build
@@ -53,6 +54,9 @@ API docs:
 ## Important configuration
 
 ```env
+APP_ENV=development
+CONNECTOR_TOKEN_ENCRYPTION_KEY=
+SESSION_ENCRYPTION_KEY=
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_DIMENSIONS=1536
 CHUNK_TARGET_TOKENS=600
@@ -61,6 +65,8 @@ CHUNK_OVERLAP_TOKENS=80
 EMBEDDING_BATCH_SIZE=32
 EMBEDDING_REQUEST_MAX_TOTAL_TOKENS=6000
 ```
+
+`CONNECTOR_TOKEN_ENCRYPTION_KEY` and `SESSION_ENCRYPTION_KEY` may rely on development fallbacks only when `APP_ENV=development`. Staging and production must provide both values explicitly.
 
 ## Design notes
 

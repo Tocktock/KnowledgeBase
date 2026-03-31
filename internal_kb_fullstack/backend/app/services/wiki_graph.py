@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.utils import heading_anchor, slugify
-from app.db.models import Document, DocumentLink, DocumentRevision
+from app.db.models import Document, DocumentLink, DocumentRevision, DocumentVisibilityScope
 from app.services.catalog import find_related_documents, lookup_documents_by_slugs
 
 WIKI_LINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]")
@@ -126,10 +126,13 @@ async def get_document_relations(
     document_id: UUID,
     workspace_id: UUID | None = None,
     limit: int = 8,
+    include_evidence_only: bool = False,
 ) -> dict[str, list[dict]]:
     stmt = select(Document).where(Document.id == document_id)
     if workspace_id is not None:
         stmt = stmt.where(Document.workspace_id == workspace_id)
+    if not include_evidence_only:
+        stmt = stmt.where(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
     document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
         return {"outgoing": [], "backlinks": [], "related": []}
@@ -147,7 +150,13 @@ async def get_document_relations(
         )
         outgoing_slugs = list(dict.fromkeys(result.scalars().all()))
 
-    outgoing = await lookup_documents_by_slugs(session, outgoing_slugs, workspace_id=document.workspace_id, exclude_id=document.id)
+    outgoing = await lookup_documents_by_slugs(
+        session,
+        outgoing_slugs,
+        workspace_id=document.workspace_id,
+        exclude_id=document.id,
+        include_evidence_only=include_evidence_only,
+    )
     backlinks = await find_backlinks(
         session,
         workspace_id=document.workspace_id,
@@ -155,6 +164,7 @@ async def get_document_relations(
         target_slug=document.slug,
         exclude_id=document.id,
         limit=limit,
+        include_evidence_only=include_evidence_only,
     )
     related = await find_related_documents(
         session,
@@ -163,6 +173,7 @@ async def get_document_relations(
         owner_team=document.owner_team,
         exclude_id=document.id,
         limit=limit,
+        include_evidence_only=include_evidence_only,
     )
 
     return {
@@ -180,6 +191,7 @@ async def find_backlinks(
     target_slug: str,
     exclude_id: UUID,
     limit: int,
+    include_evidence_only: bool = False,
 ) -> list[dict]:
     current_revision = aliased(DocumentRevision)
 
@@ -217,6 +229,8 @@ async def find_backlinks(
     )
     if workspace_id is not None:
         stmt = stmt.where(Document.workspace_id == workspace_id)
+    if not include_evidence_only:
+        stmt = stmt.where(Document.visibility_scope == DocumentVisibilityScope.member_visible.value)
 
     rows = (await session.execute(stmt)).mappings().all()
     return [dict(row) for row in rows]

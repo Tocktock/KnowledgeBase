@@ -37,6 +37,8 @@ Connectors import workspace knowledge into a single searchable layer. Every conn
 - Default UI hides raw `resource_kind`, `external_id`, and low-level metadata.
 - Advanced selection remains admin-only.
 - Login continuation always routes anonymous connector actions through `/login` and resumes the provider flow afterward.
+- Connector continuation targets (`return_to`) are normalized to internal application paths only before auth or provider redirects are resumed.
+- Invalid continuation targets fall back to `/connectors` or the current provider setup flow rather than leaving the application origin.
 - `/connectors` is the overview page. Provider-specific browse, upload, and resource-creation work happens on dedicated setup or connection-detail routes.
 
 ## Provider and template model

@@ -190,7 +190,7 @@ class Document(Base):
     source_system: Mapped[str] = mapped_column(String(50), nullable=False)
     source_external_id: Mapped[str | None] = mapped_column(Text(), nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
-    slug: Mapped[str] = mapped_column(Text(), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(Text(), nullable=False)
     title: Mapped[str] = mapped_column(Text(), nullable=False)
     language_code: Mapped[str] = mapped_column(String(12), nullable=False, server_default="ko")
     doc_type: Mapped[str] = mapped_column(String(50), nullable=False, server_default="knowledge")
@@ -602,6 +602,7 @@ class GlossaryVerificationPolicy(Base):
 
 class KnowledgeConcept(Base):
     __tablename__ = "knowledge_concepts"
+    __table_args__ = (UniqueConstraint("workspace_id", "public_slug", name="uq_knowledge_concepts_workspace_public_slug"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
     workspace_id: Mapped[uuid.UUID] = mapped_column(
@@ -610,6 +611,7 @@ class KnowledgeConcept(Base):
         nullable=False,
     )
     normalized_term: Mapped[str] = mapped_column(Text(), nullable=False)
+    public_slug: Mapped[str] = mapped_column(Text(), nullable=False)
     display_term: Mapped[str] = mapped_column(Text(), nullable=False)
     aliases: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     language_code: Mapped[str] = mapped_column(String(12), nullable=False, server_default="ko")

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 import { getSessionToken, proxyJson } from '@/lib/api/proxy'
+import { coerceInternalPath } from '@/lib/internal-paths'
 
 function appUrl(request: NextRequest, path: string) {
   const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? 'localhost:3000'
@@ -24,5 +25,5 @@ export async function GET(
     return NextResponse.redirect(appUrl(request, '/connectors?connector_error=callback_failed'))
   }
   const payload = (await response.json()) as { redirect_to: string }
-  return NextResponse.redirect(appUrl(request, payload.redirect_to || '/connectors'))
+  return NextResponse.redirect(appUrl(request, coerceInternalPath(payload.redirect_to, '/connectors')))
 }

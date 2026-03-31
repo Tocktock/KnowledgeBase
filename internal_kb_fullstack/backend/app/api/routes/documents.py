@@ -50,6 +50,19 @@ def _require_authoring_workspace(auth_user: AuthenticatedUser) -> UUID:
     return auth_user.current_workspace_id
 
 
+def _viewer_can_include_evidence_only(
+    auth_user: AuthenticatedUser | None,
+    *,
+    workspace_id: UUID | None,
+) -> bool:
+    return bool(
+        auth_user is not None
+        and workspace_id is not None
+        and auth_user.current_workspace_id == workspace_id
+        and auth_user.can_manage_workspace_connectors
+    )
+
+
 
 def _document_summary(document: Document) -> DocumentSummary:
     return DocumentSummary(
@@ -241,11 +254,22 @@ async def get_document_by_slug_route(
     auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentViewResponse:
     workspace_id = await resolve_read_workspace_id(session, auth_user)
-    document, revision = await get_document_by_slug(session, slug=slug, workspace_id=workspace_id)
+    include_evidence_only = _viewer_can_include_evidence_only(auth_user, workspace_id=workspace_id)
+    document, revision = await get_document_by_slug(
+        session,
+        slug=slug,
+        workspace_id=workspace_id,
+        include_evidence_only=include_evidence_only,
+    )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    _doc, _rev, chunks = await get_document_detail(session, document.id, workspace_id=workspace_id)
+    _doc, _rev, chunks = await get_document_detail(
+        session,
+        document.id,
+        workspace_id=workspace_id,
+        include_evidence_only=include_evidence_only,
+    )
     content_markdown = revision.content_markdown if revision is not None else None
     content_text = revision.content_text if revision is not None else None
     return DocumentViewResponse(
@@ -266,7 +290,12 @@ async def get_document_route(
     auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentDetailResponse:
     workspace_id = await resolve_read_workspace_id(session, auth_user)
-    document, revision, chunks = await get_document_detail(session, document_id, workspace_id=workspace_id)
+    document, revision, chunks = await get_document_detail(
+        session,
+        document_id,
+        workspace_id=workspace_id,
+        include_evidence_only=_viewer_can_include_evidence_only(auth_user, workspace_id=workspace_id),
+    )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -284,7 +313,12 @@ async def get_document_content_route(
     auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentContentResponse:
     workspace_id = await resolve_read_workspace_id(session, auth_user)
-    document, revision, _chunks = await get_document_detail(session, document_id, workspace_id=workspace_id)
+    document, revision, _chunks = await get_document_detail(
+        session,
+        document_id,
+        workspace_id=workspace_id,
+        include_evidence_only=_viewer_can_include_evidence_only(auth_user, workspace_id=workspace_id),
+    )
     if document is None or revision is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return DocumentContentResponse(
@@ -303,7 +337,13 @@ async def get_document_relations_route(
     auth_user: AuthenticatedUser | None = Depends(get_optional_authenticated_user),
 ) -> DocumentRelationsResponse:
     workspace_id = await resolve_read_workspace_id(session, auth_user)
-    relations = await get_document_relations(session, document_id=document_id, workspace_id=workspace_id, limit=limit)
+    relations = await get_document_relations(
+        session,
+        document_id=document_id,
+        workspace_id=workspace_id,
+        limit=limit,
+        include_evidence_only=_viewer_can_include_evidence_only(auth_user, workspace_id=workspace_id),
+    )
     return DocumentRelationsResponse(
         outgoing=[_relation_item(item) for item in relations["outgoing"]],
         backlinks=[_relation_item(item) for item in relations["backlinks"]],

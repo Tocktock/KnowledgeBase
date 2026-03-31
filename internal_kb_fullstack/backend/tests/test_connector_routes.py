@@ -262,6 +262,19 @@ def test_resource_supports_connector_sync_rejects_uploaded_exports() -> None:
     assert _resource_supports_connector_sync(SimpleNamespace(selection_mode="export_upload")) is False
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("//evil.example/path", "/connectors"),
+        ("https://evil.example/path", "/connectors"),
+        ("/connectors/setup/github?scope=workspace#resources", "/connectors/setup/github?scope=workspace#resources"),
+        (None, "/connectors"),
+    ],
+)
+def test_connector_safe_return_path_normalizes_targets(value: str | None, expected: str) -> None:
+    assert connector_service._safe_return_path(value) == expected
+
+
 @pytest.mark.asyncio
 async def test_request_resource_sync_rejects_uploaded_export_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     auth_user = make_auth_user(role="owner")

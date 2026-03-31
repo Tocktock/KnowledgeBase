@@ -61,6 +61,19 @@ def _require_workspace_glossary_manager(auth_user: AuthenticatedUser) -> None:
         raise HTTPException(status_code=403, detail="Glossary validation runs require a workspace owner or admin.")
 
 
+def _viewer_can_include_evidence_support(
+    auth_user: AuthenticatedUser | None,
+    *,
+    workspace_id: UUID | None,
+) -> bool:
+    return bool(
+        auth_user is not None
+        and workspace_id is not None
+        and auth_user.current_workspace_id == workspace_id
+        and auth_user.can_manage_workspace_connectors
+    )
+
+
 @router.post("/refresh", response_model=JobSummary, status_code=status.HTTP_202_ACCEPTED)
 async def refresh_glossary_route(
     payload: GlossaryRefreshRequest,
@@ -198,7 +211,12 @@ async def get_glossary_by_slug_route(
 ) -> GlossaryConceptDetailResponse:
     workspace_id = await resolve_read_workspace_id(session, auth_user)
     try:
-        return await get_glossary_concept_by_slug(session, slug, workspace_id=workspace_id)
+        return await get_glossary_concept_by_slug(
+            session,
+            slug,
+            workspace_id=workspace_id,
+            include_evidence_only_support=_viewer_can_include_evidence_support(auth_user, workspace_id=workspace_id),
+        )
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -211,7 +229,12 @@ async def get_glossary_concept_route(
 ) -> GlossaryConceptDetailResponse:
     workspace_id = await resolve_read_workspace_id(session, auth_user)
     try:
-        return await get_glossary_concept_detail(session, concept_id, workspace_id=workspace_id)
+        return await get_glossary_concept_detail(
+            session,
+            concept_id,
+            workspace_id=workspace_id,
+            include_evidence_only_support=_viewer_can_include_evidence_support(auth_user, workspace_id=workspace_id),
+        )
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -241,7 +264,12 @@ async def create_glossary_draft_route(
     await session.flush()
 
     try:
-        detail = await create_or_regenerate_glossary_draft(session, concept_id, payload)
+        detail = await create_or_regenerate_glossary_draft(
+            session,
+            concept_id,
+            payload,
+            include_evidence_only_support=True,
+        )
     except GlossaryNotFoundError as exc:
         job.status = JobStatus.failed.value
         job.error_message = str(exc)
@@ -290,6 +318,7 @@ async def update_glossary_route(
             concept_id,
             payload,
             verified_by_user_id=auth_user.user.id,
+            include_evidence_only_support=True,
         )
     except GlossaryNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

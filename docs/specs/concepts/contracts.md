@@ -31,6 +31,9 @@ Canonical schema modules:
 - Purpose: member-facing concept detail page.
 - Caller: anonymous or authenticated user.
 - Response: HTML page rendered by the frontend app.
+- Important behavior:
+  - the page uses the concept's stored `public_slug` as the canonical route key
+  - legacy slug lookups may resolve when unique, but the page redirects to the canonical stored slug when they do
 
 ## Backend glossary read APIs
 
@@ -48,6 +51,11 @@ Canonical schema modules:
 - Purpose: resolve one concept by slug.
 - Caller: anonymous or authenticated user.
 - Response model: glossary concept detail defined in `glossary.py`
+- Important behavior:
+  - canonical lookups resolve by stored workspace-scoped `public_slug`
+  - one legacy fallback lookup is allowed only when the derived display-term slug matches exactly one concept in the resolved workspace
+  - member and anonymous callers receive only support rows backed by `member_visible` documents
+  - current-workspace owners and admins may receive evidence-only support rows on direct detail reads
 - Important error states:
   - unknown concept slug
 
@@ -56,6 +64,9 @@ Canonical schema modules:
 - Purpose: resolve one concept by id.
 - Caller: anonymous or authenticated user.
 - Response model: glossary concept detail defined in `glossary.py`
+- Important behavior:
+  - member and anonymous callers receive only support rows backed by `member_visible` documents
+  - current-workspace owners and admins may receive evidence-only support rows on direct detail reads
 
 ## Shared concept-facing shapes
 
@@ -65,5 +76,6 @@ Canonical schema modules:
 
 Important support item behavior:
 
-- support rows may reference member-visible or evidence-only underlying evidence
-- the concept surface may show trust/source context even when the underlying evidence document does not appear in normal docs/search listings
+- member and anonymous concept detail responses include only support rows backed by member-visible underlying evidence
+- current-workspace owners and admins may receive evidence-only support rows on direct detail responses
+- the concept surface may still show trust/source context even when the underlying evidence document does not appear in default docs/search listings

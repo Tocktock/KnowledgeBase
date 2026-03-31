@@ -44,6 +44,7 @@ The glossary definition workflow is the primary authoritative output of the prod
 - New terms discovered by sync enter the queue as suggested content and are not auto-approved.
 - Manual requests from signed-in workspace members also enter the queue as suggested content and are not auto-approved.
 - Request-only or weakly grounded concepts remain `verification_state = evidence_insufficient` until the workspace policy is satisfied.
+- Every concept stores a stable workspace-scoped `public_slug` so review, publication, and member-facing links do not depend on the latest `display_term`.
 
 ## Verification policy
 
@@ -118,6 +119,7 @@ Workspace-wide runs operate on active connected sources in the current workspace
 - Members can consume approved concepts, but they do not operate validation runs or glossary mutations.
 - Review-required status and evidence drift are operational data points exposed through the admin workflow.
 - Approval failures caused by verification policy must return machine-readable reasons so the review UI can explain what is missing.
+- Admin review and direct admin concept reads may include evidence-only support rows; member-facing concept reads must not.
 
 ## Important contracts owned by this spec
 

@@ -6,7 +6,7 @@ import re
 from hashlib import sha256
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Text, case, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -227,6 +227,33 @@ def concept_slug(value: str) -> str:
     return slugify(normalize_concept_term(value))
 
 
+def concept_public_slug(concept: KnowledgeConcept) -> str:
+    stored_slug = normalize_whitespace(getattr(concept, "public_slug", "") or "").strip()
+    return stored_slug or concept_slug(concept.display_term)
+
+
+def allocate_concept_public_slug(
+    display_term: str,
+    *,
+    existing_slugs: set[str],
+    concept_id: UUID,
+) -> str:
+    base_slug = concept_slug(display_term)
+    if base_slug not in existing_slugs:
+        existing_slugs.add(base_slug)
+        return base_slug
+
+    id_prefix = str(concept_id).split("-", 1)[0]
+    candidate = f"{base_slug}-{id_prefix}"
+    if candidate not in existing_slugs:
+        existing_slugs.add(candidate)
+        return candidate
+
+    candidate = f"{base_slug}-{str(concept_id).replace('-', '')}"
+    existing_slugs.add(candidate)
+    return candidate
+
+
 def concept_search_key(value: str | None) -> str:
     if not value:
         return ""
@@ -419,6 +446,22 @@ async def _load_concept_summary_context(
     return docs_by_id, policies_by_id, users_by_id
 
 
+async def _load_workspace_public_slugs(
+    session: AsyncSession,
+    workspace_id: UUID | None,
+) -> set[str]:
+    if workspace_id is None:
+        return set()
+    result = await session.execute(
+        select(KnowledgeConcept.public_slug).where(KnowledgeConcept.workspace_id == workspace_id)
+    )
+    return {
+        normalize_whitespace(slug).strip()
+        for slug in result.scalars().all()
+        if slug and normalize_whitespace(slug).strip()
+    }
+
+
 def _verification_policy_gap_messages(
     concept: KnowledgeConcept,
     policy: GlossaryVerificationPolicy,
@@ -604,7 +647,7 @@ def _concept_summary(
     )
     return GlossaryConceptSummary(
         id=concept.id,
-        slug=concept_slug(concept.display_term),
+        slug=concept_public_slug(concept),
         normalized_term=concept.normalized_term,
         display_term=concept.display_term,
         aliases=list(concept.aliases or []),
@@ -836,9 +879,17 @@ async def create_glossary_concept_request(
         )
 
     policy = await _ensure_default_verification_policy(session, workspace_id)
+    existing_public_slugs = await _load_workspace_public_slugs(session, workspace_id)
+    concept_id = uuid4()
     concept = KnowledgeConcept(
+        id=concept_id,
         workspace_id=workspace_id,
         normalized_term=normalized_term,
+        public_slug=allocate_concept_public_slug(
+            raw_display_term or normalized_term,
+            existing_slugs=existing_public_slugs,
+            concept_id=concept_id,
+        ),
         display_term=raw_display_term or normalized_term,
         aliases=aliases,
         language_code="ko",
@@ -878,7 +929,6 @@ async def create_glossary_concept_request(
         refreshed_at=utcnow(),
     )
     session.add(concept)
-    await session.flush()
     await session.commit()
     return GlossaryConceptRequestResponse(
         request_status="created",
@@ -953,6 +1003,7 @@ async def get_glossary_concept_detail(
     concept_id: UUID,
     *,
     workspace_id: UUID | None = None,
+    include_evidence_only_support: bool = False,
 ) -> GlossaryConceptDetailResponse:
     concept = await _get_concept_or_raise(session, concept_id)
     if workspace_id is not None and concept.workspace_id != workspace_id:
@@ -976,6 +1027,12 @@ async def get_glossary_concept_detail(
             .order_by(ConceptSupport.evidence_strength.desc(), ConceptSupport.evidence_kind.asc())
         )
     ).all()
+    if not include_evidence_only_support:
+        support_rows = [
+            row
+            for row in support_rows
+            if row[1].visibility_scope == DocumentVisibilityScope.member_visible.value
+        ]
     support_items = [
         GlossarySupportItem(
             id=support.id,
@@ -1039,15 +1096,35 @@ async def get_glossary_concept_by_slug(
     slug: str,
     *,
     workspace_id: UUID | None = None,
+    include_evidence_only_support: bool = False,
 ) -> GlossaryConceptDetailResponse:
-    stmt = select(KnowledgeConcept).where(KnowledgeConcept.status != ConceptStatus.ignored.value)
+    stmt = select(KnowledgeConcept).where(
+        KnowledgeConcept.status != ConceptStatus.ignored.value,
+        KnowledgeConcept.public_slug == slug,
+    )
     if workspace_id is not None:
         stmt = stmt.where(KnowledgeConcept.workspace_id == workspace_id)
-    result = await session.execute(stmt)
-    concepts = list(result.scalars().all())
-    for concept in concepts:
-        if concept_slug(concept.display_term) == slug:
-            return await get_glossary_concept_detail(session, concept.id, workspace_id=workspace_id)
+    canonical_match = (await session.execute(stmt)).scalar_one_or_none()
+    if canonical_match is not None:
+        return await get_glossary_concept_detail(
+            session,
+            canonical_match.id,
+            workspace_id=workspace_id,
+            include_evidence_only_support=include_evidence_only_support,
+        )
+
+    fallback_stmt = select(KnowledgeConcept).where(KnowledgeConcept.status != ConceptStatus.ignored.value)
+    if workspace_id is not None:
+        fallback_stmt = fallback_stmt.where(KnowledgeConcept.workspace_id == workspace_id)
+    concepts = list((await session.execute(fallback_stmt)).scalars().all())
+    legacy_matches = [concept for concept in concepts if concept_slug(concept.display_term) == slug]
+    if len(legacy_matches) == 1:
+        return await get_glossary_concept_detail(
+            session,
+            legacy_matches[0].id,
+            workspace_id=workspace_id,
+            include_evidence_only_support=include_evidence_only_support,
+        )
     raise GlossaryNotFoundError("Glossary concept not found")
 
 
@@ -1599,6 +1676,11 @@ async def _apply_glossary_refresh(
             await session.execute(select(KnowledgeConcept).where(KnowledgeConcept.workspace_id == workspace_id))
         ).scalars().all()
     }
+    reserved_public_slugs = {
+        normalize_whitespace(concept.public_slug).strip()
+        for concept in existing_concepts.values()
+        if concept.public_slug and normalize_whitespace(concept.public_slug).strip()
+    }
     targeted_keys = allowed_term_keys or {
         concept_search_key(term)
         for term in {*(candidates.keys()), *existing_concepts.keys()}
@@ -1627,9 +1709,16 @@ async def _apply_glossary_refresh(
         is_new = concept is None
 
         if concept is None:
+            concept_id = uuid4()
             concept = KnowledgeConcept(
+                id=concept_id,
                 workspace_id=workspace_id,
                 normalized_term=normalized_term,
+                public_slug=allocate_concept_public_slug(
+                    display_term,
+                    existing_slugs=reserved_public_slugs,
+                    concept_id=concept_id,
+                ),
                 display_term=display_term,
                 aliases=sorted(candidate.aliases),
                 language_code="ko",
@@ -1662,6 +1751,12 @@ async def _apply_glossary_refresh(
             session.add(concept)
             await session.flush()
         else:
+            if not concept.public_slug:
+                concept.public_slug = allocate_concept_public_slug(
+                    concept.display_term or display_term,
+                    existing_slugs=reserved_public_slugs,
+                    concept_id=concept.id,
+                )
             concept.display_term = display_term
             concept.aliases = sorted(candidate.aliases)
             concept.language_code = "ko"
@@ -1859,8 +1954,15 @@ async def update_glossary_concept(
     payload: GlossaryConceptUpdateRequest,
     *,
     verified_by_user_id: UUID | None = None,
+    include_evidence_only_support: bool = False,
 ) -> GlossaryConceptDetailResponse:
     concept = await _get_concept_or_raise(session, concept_id)
+    if not concept.public_slug:
+        concept.public_slug = allocate_concept_public_slug(
+            concept.display_term,
+            existing_slugs=await _load_workspace_public_slugs(session, concept.workspace_id),
+            concept_id=concept.id,
+        )
     checked_at = utcnow()
     policy = await _ensure_default_verification_policy(session, concept.workspace_id)
     concept.verification_policy_id = policy.id
@@ -1889,7 +1991,7 @@ async def update_glossary_concept(
                     },
                 }
             )
-        target_slug = f"glossary-{concept_slug(concept.display_term)}"
+        target_slug = f"glossary-{concept_public_slug(concept)}"
         slug_owner = (
             await session.execute(
                 select(Document).where(
@@ -1985,14 +2087,22 @@ async def update_glossary_concept(
             raise GlossaryError("split_aliases is required for split")
         remaining_aliases = {alias for alias in (concept.aliases or []) if alias not in payload.split_aliases}
         concept.aliases = sorted(remaining_aliases)
+        reserved_public_slugs = await _load_workspace_public_slugs(session, concept.workspace_id)
         supports = (
             await session.execute(select(ConceptSupport).where(ConceptSupport.concept_id == concept.id))
         ).scalars().all()
         for alias in payload.split_aliases:
             normalized_alias = normalize_concept_term(alias)
+            split_concept_id = uuid4()
             split_concept = KnowledgeConcept(
+                id=split_concept_id,
                 workspace_id=concept.workspace_id,
                 normalized_term=normalized_alias,
+                public_slug=allocate_concept_public_slug(
+                    alias,
+                    existing_slugs=reserved_public_slugs,
+                    concept_id=split_concept_id,
+                ),
                 display_term=alias,
                 aliases=[alias],
                 language_code=concept.language_code,
@@ -2081,8 +2191,17 @@ async def update_glossary_concept(
     )
     await session.commit()
     if concept.workspace_id is None:
-        return await get_glossary_concept_detail(session, concept.id)
-    return await get_glossary_concept_detail(session, concept.id, workspace_id=concept.workspace_id)
+        return await get_glossary_concept_detail(
+            session,
+            concept.id,
+            include_evidence_only_support=include_evidence_only_support,
+        )
+    return await get_glossary_concept_detail(
+        session,
+        concept.id,
+        workspace_id=concept.workspace_id,
+        include_evidence_only_support=include_evidence_only_support,
+    )
 
 
 async def create_or_regenerate_glossary_draft(
@@ -2091,12 +2210,28 @@ async def create_or_regenerate_glossary_draft(
     payload: GlossaryDraftRequest,
     *,
     commit: bool = True,
+    include_evidence_only_support: bool = False,
 ) -> GlossaryConceptDetailResponse:
     concept = await _get_concept_or_raise(session, concept_id)
+    if not concept.public_slug:
+        concept.public_slug = allocate_concept_public_slug(
+            concept.display_term,
+            existing_slugs=await _load_workspace_public_slugs(session, concept.workspace_id),
+            concept_id=concept.id,
+        )
     if concept.generated_document_id is not None and not payload.regenerate:
         if concept.workspace_id is None:
-            return await get_glossary_concept_detail(session, concept.id)
-        return await get_glossary_concept_detail(session, concept.id, workspace_id=concept.workspace_id)
+            return await get_glossary_concept_detail(
+                session,
+                concept.id,
+                include_evidence_only_support=include_evidence_only_support,
+            )
+        return await get_glossary_concept_detail(
+            session,
+            concept.id,
+            workspace_id=concept.workspace_id,
+            include_evidence_only_support=include_evidence_only_support,
+        )
     from app.schemas.documents import IngestDocumentRequest
     from app.services.document_drafts import generate_definition_markdown_from_references
     from app.services.ingest import ingest_document
@@ -2156,7 +2291,7 @@ async def create_or_regenerate_glossary_draft(
     else:
         raise GlossaryError("No supporting evidence is available for this concept.")
 
-    draft_slug = f"glossary-{concept_slug(concept.display_term)}"
+    draft_slug = f"glossary-{concept_public_slug(concept)}"
     draft_source_external_id = f"concept:{concept.id}:draft"
     if concept.status == ConceptStatus.approved.value and concept.canonical_document_id is not None:
         draft_slug = f"{draft_slug}-draft"
@@ -2229,8 +2364,17 @@ async def create_or_regenerate_glossary_draft(
     else:
         await session.flush()
     if concept.workspace_id is None:
-        return await get_glossary_concept_detail(session, concept.id)
-    return await get_glossary_concept_detail(session, concept.id, workspace_id=concept.workspace_id)
+        return await get_glossary_concept_detail(
+            session,
+            concept.id,
+            include_evidence_only_support=include_evidence_only_support,
+        )
+    return await get_glossary_concept_detail(
+        session,
+        concept.id,
+        workspace_id=concept.workspace_id,
+        include_evidence_only_support=include_evidence_only_support,
+    )
 
 
 async def enqueue_glossary_refresh_job(

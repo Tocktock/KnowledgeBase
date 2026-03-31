@@ -81,6 +81,9 @@ Canonical schema modules:
 - Purpose: resolve a document by slug.
 - Caller: anonymous or authenticated user.
 - Response model: `DocumentViewResponse`
+- Important behavior:
+  - anonymous viewers and non-admin members receive only `member_visible` documents
+  - current-workspace owners and admins may resolve `evidence_only` documents directly
 - Important error states:
   - unknown slug
   - filtered or inaccessible document
@@ -91,12 +94,16 @@ Canonical schema modules:
 - Purpose: resolve a document by document id.
 - Caller: anonymous or authenticated user.
 - Response model: `DocumentViewResponse`
+- Important behavior:
+  - the same evidence-only visibility rule applies as slug-based detail
 
 ### `GET /v1/documents/{document_id}/content`
 
 - Purpose: fetch the rendered or source content for a document.
 - Caller: anonymous or authenticated user.
 - Response model: `DocumentContentResponse`
+- Important behavior:
+  - the same evidence-only visibility rule applies as document detail
 
 ### `GET /v1/documents/{document_id}/relations`
 
@@ -105,6 +112,7 @@ Canonical schema modules:
 - Response model: `DocumentRelationsResponse`
 - Important behavior:
   - outgoing links, backlinks, and related documents are scoped to the same resolved workspace as the document detail page
+  - the same evidence-only visibility rule applies as document detail
 
 ## Shared trust contract
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -80,6 +80,22 @@ class Settings(BaseSettings):
     @property
     def admin_emails(self) -> set[str]:
         return {email.strip().lower() for email in self.admin_emails_raw.split(",") if email.strip()}
+
+    @model_validator(mode="after")
+    def _validate_environment_secrets(self) -> "Settings":
+        if self.app_env not in {"staging", "production"}:
+            return self
+
+        missing: list[str] = []
+        if not self.connector_token_encryption_key.strip():
+            missing.append("CONNECTOR_TOKEN_ENCRYPTION_KEY")
+        if not self.session_encryption_key.strip():
+            missing.append("SESSION_ENCRYPTION_KEY")
+        if missing:
+            raise ValueError(
+                f"APP_ENV={self.app_env} requires explicit values for {', '.join(missing)}."
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

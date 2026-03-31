@@ -25,6 +25,9 @@ The member-facing knowledge experience is built around trusted search and docume
 - `/docs` and `/docs/[slug]` are the main document browsing surfaces.
 - Member-facing search and document lists must filter to `member_visible` content by default.
 - Evidence-only documents may support glossary validation internally, but they must not appear in normal docs lists or member-facing search result sets.
+- Direct document read routes are role-sensitive:
+  - anonymous users and non-admin members can read only `member_visible` documents
+  - current-workspace owners and admins may directly open `evidence_only` documents through the existing document detail, content, and relation routes
 - Search may resolve exact glossary concepts and surface canonical glossary pages ahead of generic evidence.
 - Read-side workspace resolution is server-side:
   - authenticated viewers use their current workspace
@@ -63,12 +66,14 @@ Search results, document detail, and concept-linked evidence share a normalized 
 - Document detail should foreground provenance, freshness, and related concepts.
 - When a canonical source URL exists, the detail page should link back to the original location.
 - Trust and provenance should be visible without requiring the user to inspect operational pages.
+- When admins directly open an `evidence_only` document, outgoing links, backlinks, and related documents follow the same role-sensitive visibility mode for that request.
 
 ## Permissions and visibility
 
 - Anonymous users can access the read-only retrieval surfaces.
 - Member-visible filtering is the default on `/search`, `/docs`, and document detail navigation.
 - Evidence-only documents may be used internally for glossary support and validation, but they are not listed in default member browsing experiences.
+- Direct evidence-only document reads are reserved for current-workspace owners and admins; they are not a separate public route family.
 - Search, docs list, docs detail, backlinks, related documents, and concept grounding must all filter to the same resolved workspace.
 
 ## Important contracts owned by this spec

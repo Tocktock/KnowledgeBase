@@ -48,9 +48,18 @@ def _normalize_fernet_key(raw: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
-def _token_fernet() -> Fernet:
+def _connector_token_secret() -> str:
     settings = get_settings()
-    return Fernet(_normalize_fernet_key(settings.connector_token_encryption_key or "connector-dev-key"))
+    return settings.connector_token_encryption_key or "connector-dev-key"
+
+
+def _session_secret() -> bytes:
+    settings = get_settings()
+    return (settings.session_encryption_key or "session-dev-key").encode("utf-8")
+
+
+def _token_fernet() -> Fernet:
+    return Fernet(_normalize_fernet_key(_connector_token_secret()))
 
 
 def encrypt_secret(value: str | None) -> str | None:
@@ -66,7 +75,4 @@ def decrypt_secret(value: str | None) -> str | None:
 
 
 def session_token_hash(token: str) -> str:
-    settings = get_settings()
-    secret = (settings.session_encryption_key or "session-dev-key").encode("utf-8")
-    return hmac.new(secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
-
+    return hmac.new(_session_secret(), token.encode("utf-8"), hashlib.sha256).hexdigest()

@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.deps import get_authenticated_user
+from app.api.deps import get_authenticated_user, get_optional_authenticated_user
 from app.api.routes import glossary as glossary_route
 from app.api.routes import search as search_route
 from app.db.engine import get_db_session
@@ -474,8 +474,15 @@ async def test_glossary_by_slug_route_maps_not_found(monkeypatch: pytest.MonkeyP
     async def override_session():
         yield object()
 
-    async def fake_get_glossary_concept_by_slug(_session: object, _slug: str, *, workspace_id=None):
+    async def fake_get_glossary_concept_by_slug(
+        _session: object,
+        _slug: str,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
         assert workspace_id is None
+        assert include_evidence_only_support is False
         raise GlossaryNotFoundError("Glossary concept not found")
 
     monkeypatch.setattr(glossary_route, "get_glossary_concept_by_slug", fake_get_glossary_concept_by_slug)
@@ -501,7 +508,14 @@ async def test_glossary_draft_route_returns_generated_detail(monkeypatch: pytest
     async def override_session():
         yield session
 
-    async def fake_create_or_regenerate_glossary_draft(_session: object, _concept_id: object, _payload: object) -> GlossaryConceptDetailResponse:
+    async def fake_create_or_regenerate_glossary_draft(
+        _session: object,
+        _concept_id: object,
+        _payload: object,
+        *,
+        include_evidence_only_support: bool = False,
+    ) -> GlossaryConceptDetailResponse:
+        assert include_evidence_only_support is True
         return detail
 
     monkeypatch.setattr(glossary_route, "create_or_regenerate_glossary_draft", fake_create_or_regenerate_glossary_draft)
@@ -519,3 +533,91 @@ async def test_glossary_draft_route_returns_generated_detail(monkeypatch: pytest
     assert payload["concept"]["display_term"] == "센디 차량"
     assert session.flush_calls == 1
     assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_glossary_by_slug_route_hides_evidence_support_for_member(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_id = uuid4()
+    auth_user = make_auth_user(role="member")
+    auth_user.current_workspace_id = workspace_id
+    captured: dict[str, object] = {}
+
+    async def override_session():
+        yield object()
+
+    async def fake_resolve_workspace(*_args, **_kwargs):
+        return workspace_id
+
+    async def fake_get_glossary_concept_by_slug(
+        _session: object,
+        _slug: str,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
+        captured.update(
+            {
+                "workspace_id": workspace_id,
+                "include_evidence_only_support": include_evidence_only_support,
+            }
+        )
+        return make_glossary_detail()
+
+    monkeypatch.setattr(glossary_route, "resolve_read_workspace_id", fake_resolve_workspace)
+    monkeypatch.setattr(glossary_route, "get_glossary_concept_by_slug", fake_get_glossary_concept_by_slug)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_optional_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/v1/glossary/slug/센디-차량")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured["include_evidence_only_support"] is False
+
+
+@pytest.mark.asyncio
+async def test_glossary_concept_route_includes_evidence_support_for_workspace_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_id = uuid4()
+    auth_user = make_auth_user(role="owner")
+    auth_user.current_workspace_id = workspace_id
+    detail = make_glossary_detail()
+    captured: dict[str, object] = {}
+
+    async def override_session():
+        yield object()
+
+    async def fake_resolve_workspace(*_args, **_kwargs):
+        return workspace_id
+
+    async def fake_get_glossary_concept_detail(
+        _session: object,
+        concept_id,
+        *,
+        workspace_id=None,
+        include_evidence_only_support: bool = False,
+    ):
+        captured.update(
+            {
+                "concept_id": concept_id,
+                "workspace_id": workspace_id,
+                "include_evidence_only_support": include_evidence_only_support,
+            }
+        )
+        return detail
+
+    monkeypatch.setattr(glossary_route, "resolve_read_workspace_id", fake_resolve_workspace)
+    monkeypatch.setattr(glossary_route, "get_glossary_concept_detail", fake_get_glossary_concept_detail)
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_optional_authenticated_user] = lambda: auth_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(f"/v1/glossary/{detail.concept.id}")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured["include_evidence_only_support"] is True

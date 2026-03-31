@@ -75,6 +75,9 @@ Important workspace rule:
   - `return_to`
   - optional provider-specific continuation values
 - Response shape: redirect response to provider OAuth or to `/login` when authentication is required.
+- Important behavior:
+  - `return_to` accepts only internal application paths
+  - invalid or external values are normalized to `/connectors`
 - Important error states:
   - unknown provider
   - provider not configured
@@ -85,6 +88,8 @@ Important workspace rule:
 - Purpose: complete provider OAuth and create or update a connector connection.
 - Caller: provider callback.
 - Response shape: redirect or JSON payload used by the frontend continuation flow.
+- Important behavior:
+  - callback responses return a normalized internal `redirect_to`
 - Important error states:
   - invalid provider
   - callback exchange failure

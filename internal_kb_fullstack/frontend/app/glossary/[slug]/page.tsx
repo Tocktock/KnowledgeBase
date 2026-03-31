@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 
 import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +20,9 @@ export default async function GlossaryDetailPage({ params }: { params: Promise<{
   const { slug } = await params
   const detail = await getGlossaryConceptBySlug(slug).catch(() => null)
   if (detail === null) notFound()
+  if (detail.concept.slug !== slug) {
+    redirect(`/glossary/${detail.concept.slug}`)
+  }
 
   return (
     <div className="space-y-6">

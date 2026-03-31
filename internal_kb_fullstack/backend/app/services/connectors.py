@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import get_settings
+from app.core.redirects import normalize_local_redirect_target
 from app.core.security import (
     create_code_challenge,
     decrypt_secret,
@@ -177,9 +178,7 @@ def _app_callback_path(path: str) -> str:
 
 
 def _safe_return_path(value: str | None) -> str:
-    if not value or not value.startswith("/"):
-        return "/connectors"
-    return value
+    return normalize_local_redirect_target(value, default_path="/connectors")
 
 
 def _normalize_provider(value: str) -> str:

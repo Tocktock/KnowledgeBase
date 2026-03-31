@@ -16,6 +16,7 @@ import type {
   PasswordResetPreviewResponse,
   WorkspaceInvitationPreviewResponse,
 } from '@/lib/types'
+import { coerceInternalPath } from '@/lib/internal-paths'
 import { formatDate } from '@/lib/utils'
 
 function normalizeAuthErrorMessage(message: string | null | undefined) {
@@ -54,6 +55,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 function providerPath(value: string | null) {
   if (value === 'notion') return 'notion'
+  if (value === 'github') return 'github'
   return 'google-drive'
 }
 
@@ -67,7 +69,7 @@ function LoginPageContent() {
   const searchParams = useSearchParams()
   const queryClient = useQueryClient()
 
-  const returnTo = searchParams.get('return_to') ?? '/connectors'
+  const returnTo = coerceInternalPath(searchParams.get('return_to'), '/connectors')
   const postAuthAction = searchParams.get('post_auth_action')
   const ownerScope = searchParams.get('owner_scope')
   const provider = searchParams.get('provider')
@@ -148,7 +150,7 @@ function LoginPageContent() {
       queryClient.invalidateQueries({ queryKey: ['workspace-members'] }),
       queryClient.invalidateQueries({ queryKey: ['workspace-invitations'] }),
     ])
-    router.replace(payload.redirect_to || '/connectors')
+    router.replace(coerceInternalPath(payload.redirect_to, '/connectors'))
     router.refresh()
   }
 

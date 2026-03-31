@@ -1,3 +1,15 @@
+---
+date: 2026-03-30
+feature: connectors
+type: intent
+related_specs:
+  - /docs/specs/connectors/spec.md
+  - /docs/specs/connectors/contracts.md
+related_decisions:
+  - /docs/decisions/0005-workspace-data-connectors.md
+status: active
+---
+
 # Intent: Workspace-Safe Ingestion and Slack Readiness
 
 ## Context
