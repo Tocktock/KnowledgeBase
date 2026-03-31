@@ -30,6 +30,7 @@ Document authoring is the manual fallback path for knowledge that does not yet e
   - upload a file and convert it into a document draft
   - generate a definition draft from existing support evidence
   - reindex an existing document after changes
+- Manual and upload-backed authoring may capture optional source metadata, but stored provenance is normalized into the shared `source_url := https | generic | null` contract.
 - The editor supports visual editing, source editing, and preview workflows.
 - Slug conflicts are handled explicitly rather than silently overwriting the existing document.
 - Authoring remains secondary to synced-source ingestion in the overall product positioning.

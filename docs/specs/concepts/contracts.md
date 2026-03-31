@@ -79,3 +79,4 @@ Important support item behavior:
 - member and anonymous concept detail responses include only support rows backed by member-visible underlying evidence
 - current-workspace owners and admins may receive evidence-only support rows on direct detail responses
 - the concept surface may still show trust/source context even when the underlying evidence document does not appear in default docs/search listings
+- support-item trust uses the shared `source_url := https | generic | null` contract, and only `https://...` is rendered as an outbound original-source link

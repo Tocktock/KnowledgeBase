@@ -681,6 +681,8 @@ def _concept_summary(
             last_synced_at=concept.refreshed_at,
             evidence_count=concept.support_doc_count,
             source_url=canonical_document.source_url if canonical_document is not None else None,
+            source_external_id=canonical_document.source_external_id if canonical_document is not None else None,
+            slug=canonical_document.slug if canonical_document is not None else concept_public_slug(concept),
         ),
     )
 
@@ -1053,6 +1055,8 @@ async def get_glossary_concept_detail(
             trust=build_document_trust(
                 source_system=document.source_system,
                 source_url=document.source_url,
+                source_external_id=document.source_external_id,
+                slug=document.slug,
                 last_synced_at=document.last_ingested_at,
                 doc_type=document.doc_type,
             ),
@@ -1251,6 +1255,7 @@ async def get_concept_support_hits(
             Document.title.label("document_title"),
             Document.slug.label("document_slug"),
             Document.source_system,
+            Document.source_external_id,
             Document.source_url,
             Document.last_ingested_at.label("last_synced_at"),
             Document.meta.label("document_metadata"),
@@ -2300,7 +2305,7 @@ async def create_or_regenerate_glossary_draft(
     ingest_payload = IngestDocumentRequest(
         source_system="glossary",
         source_external_id=draft_source_external_id,
-        source_url=f"glossary://concept/{concept.id}",
+        source_url=None,
         slug=draft_slug,
         title=concept.display_term,
         content_type="markdown",

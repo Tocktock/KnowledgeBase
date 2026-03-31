@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from app.core.utils import utcnow
 from app.schemas.trust import TrustSummary
+from app.services.source_urls import canonicalize_source_url
 
 SOURCE_LABELS = {
     "manual": "Workspace note",
@@ -50,13 +51,20 @@ def build_document_trust(
     *,
     source_system: str | None,
     source_url: str | None,
+    source_external_id: str | None = None,
+    slug: str | None = None,
     last_synced_at: datetime | None,
     doc_type: str | None = None,
     evidence_count: int = 1,
 ) -> TrustSummary:
     return TrustSummary(
         source_label=source_label(source_system),
-        source_url=source_url,
+        source_url=canonicalize_source_url(
+            source_system=source_system,
+            source_url=source_url,
+            source_external_id=source_external_id,
+            slug=slug,
+        ),
         authority_kind=document_authority_kind(source_system=source_system, doc_type=doc_type),
         last_synced_at=last_synced_at,
         freshness_state=freshness_state(last_synced_at),
@@ -71,6 +79,8 @@ def build_concept_trust(
     last_synced_at: datetime | None,
     evidence_count: int,
     source_url: str | None = None,
+    source_external_id: str | None = None,
+    slug: str | None = None,
 ) -> TrustSummary:
     if len(source_systems) == 1:
         label = source_label(source_systems[0])
@@ -81,7 +91,12 @@ def build_concept_trust(
     authority_kind = "approved_concept" if status == "approved" else "candidate_concept"
     return TrustSummary(
         source_label=label,
-        source_url=source_url,
+        source_url=canonicalize_source_url(
+            source_system=source_systems[0] if len(source_systems) == 1 else "glossary",
+            source_url=source_url,
+            source_external_id=source_external_id,
+            slug=slug,
+        ),
         authority_kind=authority_kind,
         last_synced_at=last_synced_at,
         freshness_state=freshness_state(last_synced_at),
@@ -93,6 +108,8 @@ def build_search_hit_trust(
     *,
     source_system: str | None,
     source_url: str | None,
+    source_external_id: str | None = None,
+    slug: str | None = None,
     last_synced_at: datetime | None,
     evidence_count: int = 1,
     matched_concept: bool = False,
@@ -100,7 +117,12 @@ def build_search_hit_trust(
     authority_kind = "concept_evidence" if matched_concept else document_authority_kind(source_system=source_system)
     return TrustSummary(
         source_label=source_label(source_system),
-        source_url=source_url,
+        source_url=canonicalize_source_url(
+            source_system=source_system,
+            source_url=source_url,
+            source_external_id=source_external_id,
+            slug=slug,
+        ),
         authority_kind=authority_kind,
         last_synced_at=last_synced_at,
         freshness_state=freshness_state(last_synced_at),

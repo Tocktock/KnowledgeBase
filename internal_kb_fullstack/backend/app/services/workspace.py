@@ -42,6 +42,7 @@ from app.schemas.workspace import (
 from app.services.auth import AuthenticatedUser, current_workspace_summary, set_current_workspace_for_session
 from app.services.catalog import list_documents
 from app.services.glossary import _validation_run_summary, list_glossary_concepts
+from app.services.source_urls import canonicalize_source_url
 from app.services.trust import build_document_trust
 
 WORKSPACE_ADMIN_ROLES = {WorkspaceMembershipRole.owner.value, WorkspaceMembershipRole.admin.value}
@@ -176,13 +177,23 @@ async def get_current_workspace(auth_user: AuthenticatedUser) -> WorkspaceContex
 
 
 def _document_list_item(row: dict[str, object]) -> DocumentListItem:
+    row_data = dict(row)
+    canonical_source_url = canonicalize_source_url(
+        source_system=str(row_data.get("source_system") or ""),
+        source_url=row_data.get("source_url") if isinstance(row_data.get("source_url"), str) else None,
+        source_external_id=row_data.get("source_external_id") if isinstance(row_data.get("source_external_id"), str) else None,
+        slug=row_data.get("slug") if isinstance(row_data.get("slug"), str) else None,
+    )
+    row_data["source_url"] = canonical_source_url
     return DocumentListItem(
-        **row,
+        **row_data,
         trust=build_document_trust(
-            source_system=str(row.get("source_system") or ""),
-            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
-            last_synced_at=row.get("last_ingested_at"),  # type: ignore[arg-type]
-            doc_type=row.get("doc_type") if isinstance(row.get("doc_type"), str) else None,
+            source_system=str(row_data.get("source_system") or ""),
+            source_url=canonical_source_url,
+            source_external_id=row_data.get("source_external_id") if isinstance(row_data.get("source_external_id"), str) else None,
+            slug=row_data.get("slug") if isinstance(row_data.get("slug"), str) else None,
+            last_synced_at=row_data.get("last_ingested_at"),  # type: ignore[arg-type]
+            doc_type=row_data.get("doc_type") if isinstance(row_data.get("doc_type"), str) else None,
         ),
     )
 

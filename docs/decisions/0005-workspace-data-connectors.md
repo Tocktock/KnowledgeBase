@@ -1,12 +1,12 @@
 # 0005 - Workspace data connectors are zero-config for end users
 
 ## Status
-Proposed
+Accepted
 
 ## Decision
-The product moves from deployment-scoped connector ownership (`shared | user`) to workspace-scoped ownership (`workspace | personal`).
+KnowledgeHub uses workspace-scoped connector ownership (`workspace | personal`) rather than deployment-scoped connector ownership (`shared | user`).
 
-The default connector model is:
+The durable connector model is:
 - multi-tenant SaaS
 - centrally managed OAuth applications
 - invite-only workspace membership
@@ -21,35 +21,29 @@ Workspace admins connect data sources through a template-first flow:
 - select the source with a provider-native picker or search UI
 - confirm the default sync policy
 
-The first-class templates are:
-- Google Drive shared drive
-- Google Drive team folder
-- Notion team wiki page
-- Notion team database
-
 Personal connectors remain available as a secondary feature, but workspace connectors are the primary product path.
 
 ## Why
-The current connector layer is structurally reusable, but it still exposes too much of the internal model:
+The earlier deployment-scoped connector layer was structurally reusable, but it exposed too much of the internal model:
 - provider/resource terminology
 - raw resource kinds
 - external identifiers
 - low-level sync fields
 
-That is acceptable for an admin console, but it is not acceptable for a zero-config product experience.
+That was acceptable for an admin console, but it was not acceptable for a zero-config product experience.
 
-The product also currently assumes a single deployment-level admin model. That blocks the intended SaaS experience where each customer organization needs its own membership boundary, admin set, and shared data source catalog.
+The product also needed a real workspace boundary so each customer organization could own membership, admin actions, and shared source setup independently. This decision records that workspace-first connector model as a durable architectural rule rather than a future migration target.
 
-## Target architecture
+## Durable rules
 
 ### Workspace model
-- Add `workspaces`, `workspace_memberships`, and `workspace_invitations`.
+- `workspaces`, `workspace_memberships`, and `workspace_invitations` define the connector-management boundary.
 - Membership roles are `owner | admin | member`.
 - Workspace joins are invite-only.
 - Sessions carry `current_workspace_id`.
 
 ### Connector ownership
-- Replace `shared` with `workspace`.
+- Shared organizational sources use `workspace` scope.
 - Keep `personal` as a secondary scope for user-owned sources.
 - Limit active connections to one row per `(workspace_id, scope, owner_user_id, provider)`.
 
@@ -66,15 +60,15 @@ The product also currently assumes a single deployment-level admin model. That b
 - The model must be able to add future providers without changing the top-level UX structure.
 
 ### Source selection UX
-- Google Drive uses a native picker or a Drive-like browser. Manual identifier entry is not part of the default UI.
-- GitHub uses repository search and a fixed `repository_docs` template that syncs README and `docs/` content only.
-- Notion uses search plus recent items and must clearly warn that only pages or databases shared with the integration are visible.
+- Default setup starts from provider templates and provider-native browse or search flows rather than raw resource CRUD.
 - Advanced selection remains admin-only and collapsed by default.
 
 ### Document ingestion
 - Connectors stay sync-first.
 - Synced items flow into the existing document store and reuse the current `/docs`, search, and glossary pipelines.
 - User-facing surfaces show only source labels such as `Google Drive`, `GitHub`, or `Notion`, not internal connector structure.
+- Shared provenance uses the normalized `source_url` contract: `https://...`, `generic://<source_system>/<percent-encoded locator>`, or `null`.
+- Only `https://...` is treated as an outbound original-source link. `generic://...` stays display-only provenance.
 
 ## Public interface direction
 - Sessions expose `current_workspace_id`.
@@ -87,10 +81,7 @@ The product also currently assumes a single deployment-level admin model. That b
 - Connector APIs become workspace-aware.
 - Admin UX becomes a setup wizard instead of a raw connector console.
 - Regular members can consume synced content without ever opening connector management.
-- Existing single-deployment connector data needs a migration path:
-  - existing `shared` connections become default-workspace `workspace` connections
-  - existing `user` connections become `personal` connections
-  - existing admin emails seed the first workspace owners/admins
+- Deployment-scoped connector ownership is no longer a valid architecture target for new work.
 
 ## Implementation defaults
 - Workspace sources default to `auto` sync every 60 minutes.
@@ -98,9 +89,3 @@ The product also currently assumes a single deployment-level admin model. That b
 - App login stays Google-based for now.
 - Notion is a connector provider, not an app-login provider.
 - Query-time chat connector UX is out of scope for this decision.
-
-## Rollout shape
-- First add workspace, membership, and invitation tables plus session context.
-- Then migrate connector ownership from deployment-shared to workspace-first.
-- Then replace the raw connector console with template-first admin setup and read-only member status views.
-- After that, add more providers through the same capability catalog instead of building provider-specific top-level flows.

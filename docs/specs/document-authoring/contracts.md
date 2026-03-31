@@ -40,6 +40,8 @@ Canonical schema modules:
 - Request model: `IngestDocumentRequest`
 - Important request fields:
   - `source_system`
+  - optional `source_external_id`
+  - optional `source_url`
   - `title`
   - `slug`
   - `content`
@@ -50,6 +52,10 @@ Canonical schema modules:
   - `allow_slug_update`
   - `metadata`
 - Response model: write-side document result from `documents.py`
+- Important normalization behavior:
+  - `source_url` is normalized to the shared `https | generic | null` contract on write
+  - `https://...` is preserved as an external original source
+  - non-HTTPS legacy or pseudo-source values normalize into `generic://<source_system>/<percent-encoded locator>`
 - Important error states:
   - slug conflict when `allow_slug_update` is false
   - invalid document payload
@@ -74,6 +80,8 @@ Canonical schema modules:
 - Caller: authenticated user.
 - Request body: multipart file upload plus document metadata.
 - Response model: upload result defined in `documents.py`
+- Important behavior:
+  - optional source metadata supplied with the multipart request follows the same `source_url` normalization rule as `POST /v1/documents/ingest`
 - Important error states:
   - unsupported file type
   - extraction failure

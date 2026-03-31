@@ -13,6 +13,7 @@ from app.db.models import Document, DocumentChunk, KnowledgeConcept
 from app.schemas.search import SearchExplainResponse, SearchHit, SearchRequest, SearchResponse
 from app.services.embeddings import get_embedding_service
 from app.services.glossary import concept_search_key, get_concept_support_hits, resolve_concept
+from app.services.source_urls import canonicalize_source_url
 from app.services.trust import build_search_hit_trust
 
 
@@ -106,8 +107,18 @@ def _ranked_hit(hit: SearchHit, *, concept_document_ids: set[str]) -> RankedHit:
     return RankedHit(hit=hit, stage_rank=stage_rank, sort_score=sort_score, family_key=family_key)
 
 
+def _canonical_source_url_from_row(row: dict[str, object]) -> str | None:
+    return canonicalize_source_url(
+        source_system=str(row.get("source_system") or ""),
+        source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+        source_external_id=row.get("source_external_id") if isinstance(row.get("source_external_id"), str) else None,
+        slug=row.get("document_slug") if isinstance(row.get("document_slug"), str) else None,
+    )
+
+
 def _row_to_search_hit(row: dict[str, object]) -> SearchHit:
     matched_concept_id = row.get("matched_concept_id")
+    canonical_source_url = _canonical_source_url_from_row(row)
     return SearchHit(
         chunk_id=row["chunk_id"],
         document_id=row["document_id"],
@@ -115,7 +126,7 @@ def _row_to_search_hit(row: dict[str, object]) -> SearchHit:
         document_title=str(row["document_title"]),
         document_slug=str(row["document_slug"]),
         source_system=str(row["source_system"]),
-        source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+        source_url=canonical_source_url,
         section_title=row.get("section_title") if isinstance(row.get("section_title"), str) else None,
         heading_path=list(row.get("heading_path") or []),
         content_text=str(row.get("content_text") or ""),
@@ -131,7 +142,9 @@ def _row_to_search_hit(row: dict[str, object]) -> SearchHit:
         metadata=dict(row.get("metadata") or {}),
         trust=build_search_hit_trust(
             source_system=str(row["source_system"]),
-            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+            source_url=canonical_source_url,
+            source_external_id=row.get("source_external_id") if isinstance(row.get("source_external_id"), str) else None,
+            slug=row.get("document_slug") if isinstance(row.get("document_slug"), str) else None,
             last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
             evidence_count=int(row.get("evidence_count") or 1),
             matched_concept=matched_concept_id is not None,
@@ -206,6 +219,7 @@ async def hybrid_search(
                 d.title AS document_title,
                 d.slug AS document_slug,
                 d.source_system,
+                d.source_external_id,
                 d.source_url,
                 d.last_ingested_at AS last_synced_at,
                 d.metadata AS document_metadata,
@@ -230,6 +244,7 @@ async def hybrid_search(
                 document_title,
                 document_slug,
                 source_system,
+                source_external_id,
                 source_url,
                 last_synced_at,
                 document_metadata,
@@ -251,6 +266,7 @@ async def hybrid_search(
                 document_title,
                 document_slug,
                 source_system,
+                source_external_id,
                 source_url,
                 last_synced_at,
                 document_metadata,
@@ -272,6 +288,7 @@ async def hybrid_search(
                 document_title,
                 document_slug,
                 source_system,
+                source_external_id,
                 source_url,
                 last_synced_at,
                 document_metadata,
@@ -290,6 +307,7 @@ async def hybrid_search(
                 document_title,
                 document_slug,
                 source_system,
+                source_external_id,
                 source_url,
                 last_synced_at,
                 document_metadata,
@@ -308,6 +326,7 @@ async def hybrid_search(
             document_title,
             document_slug,
             source_system,
+            source_external_id,
             source_url,
             last_synced_at,
             section_title,
@@ -332,6 +351,7 @@ async def hybrid_search(
             document_title,
             document_slug,
             source_system,
+            source_external_id,
             source_url,
             last_synced_at,
             section_title,
@@ -380,6 +400,7 @@ async def _fetch_canonical_glossary_hit(
                 Document.title.label("document_title"),
                 Document.slug.label("document_slug"),
                 Document.source_system,
+                Document.source_external_id,
                 Document.source_url,
                 Document.last_ingested_at.label("last_synced_at"),
                 DocumentChunk.section_title,
@@ -422,6 +443,7 @@ async def _fetch_canonical_glossary_hit(
 
 
 def _support_row_to_hit(row: dict[str, object], *, concept: KnowledgeConcept) -> SearchHit:
+    canonical_source_url = _canonical_source_url_from_row(row)
     return SearchHit(
         chunk_id=row["chunk_id"],
         document_id=row["document_id"],
@@ -429,7 +451,7 @@ def _support_row_to_hit(row: dict[str, object], *, concept: KnowledgeConcept) ->
         document_title=str(row["document_title"]),
         document_slug=str(row["document_slug"]),
         source_system=str(row["source_system"]),
-        source_url=row.get("source_url"),
+        source_url=canonical_source_url,
         section_title=row.get("section_title"),
         heading_path=list(row.get("heading_path") or []),
         content_text=str(row.get("content_text") or row.get("support_text") or ""),
@@ -445,7 +467,9 @@ def _support_row_to_hit(row: dict[str, object], *, concept: KnowledgeConcept) ->
         metadata=dict(row.get("document_metadata") or {}),
         trust=build_search_hit_trust(
             source_system=str(row["source_system"]),
-            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+            source_url=canonical_source_url,
+            source_external_id=row.get("source_external_id") if isinstance(row.get("source_external_id"), str) else None,
+            slug=row.get("document_slug") if isinstance(row.get("document_slug"), str) else None,
             last_synced_at=row.get("last_synced_at"),  # type: ignore[arg-type]
             evidence_count=max(int(concept.support_doc_count or 1), 1),
             matched_concept=True,

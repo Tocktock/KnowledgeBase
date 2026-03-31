@@ -182,7 +182,7 @@ async def import_corpus(
         payload = IngestDocumentRequest(
             source_system=source_system,
             source_external_id=file.relative_path,
-            source_url=file.relative_path,
+            source_url=None,
             slug=file.slug,
             title=file.title,
             content_type=file.content_type,  # type: ignore[arg-type]

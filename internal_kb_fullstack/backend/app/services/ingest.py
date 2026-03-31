@@ -14,6 +14,7 @@ from app.schemas.documents import IngestDocumentRequest
 from app.services.chunking import TokenAwareChunker
 from app.services.jobs import create_embedding_job
 from app.services.parser import DocumentParser, ParsedContent
+from app.services.source_urls import canonicalize_source_url
 from app.services.wiki_graph import sync_document_links
 
 
@@ -94,13 +95,19 @@ async def _upsert_document(
 ) -> Document:
     match = await _find_document(session, payload, resolved_slug, workspace_id=workspace_id)
     document = match.document
+    canonical_source_url = canonicalize_source_url(
+        source_system=payload.source_system,
+        source_url=payload.source_url,
+        source_external_id=payload.source_external_id,
+        slug=resolved_slug,
+    )
 
     if document is None:
         document = Document(
             workspace_id=workspace_id,
             source_system=payload.source_system,
             source_external_id=payload.source_external_id,
-            source_url=payload.source_url,
+            source_url=canonical_source_url,
             slug=resolved_slug,
             title=payload.title,
             language_code=payload.language_code,
@@ -129,7 +136,7 @@ async def _upsert_document(
         if slug_owner is not None:
             raise SlugConflictError(slug_owner)
 
-    document.source_url = payload.source_url
+    document.source_url = canonical_source_url
     document.slug = resolved_slug
     document.title = payload.title
     document.language_code = payload.language_code

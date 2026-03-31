@@ -35,6 +35,10 @@ Connectors import workspace knowledge into a single searchable layer. Every conn
   - `channel_evidence`
   - `channel_summary`
 - Default UI hides raw `resource_kind`, `external_id`, and low-level metadata.
+- Synced-item provenance follows the shared `source_url` contract:
+  - `https://...` for an external original source
+  - `generic://<source_system>/<percent-encoded locator>` for normalized pseudo-source provenance
+  - `null` when no stable source value exists
 - Advanced selection remains admin-only.
 - Login continuation always routes anonymous connector actions through `/login` and resumes the provider flow afterward.
 - Connector continuation targets (`return_to`) are normalized to internal application paths only before auth or provider redirects are resumed.
@@ -94,6 +98,7 @@ Template intent:
 - Member view:
   - workspace sources are visible as read-only shared assets
   - personal source management stays separate and secondary
+  - synced item status shows outbound originals only for `https://...`; `generic://...` remains display-only provenance text
 - Evidence-source setup:
   - the admin chooses an evidence template
   - the created resource defaults to `evidence_only`

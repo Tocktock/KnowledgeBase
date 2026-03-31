@@ -126,7 +126,15 @@ Required trust fields:
 
 - `source_label`
 - `source_url`
+  - `https://...` for an external original source
+  - `generic://<source_system>/<percent-encoded locator>` for display-only normalized provenance
+  - `null` when the source has no stable URL/locator
 - `authority_kind`
 - `last_synced_at`
 - `freshness_state`
 - `evidence_count`
+
+Render semantics:
+
+- only `https://...` is an outbound link
+- `generic://...` is rendered as provenance text

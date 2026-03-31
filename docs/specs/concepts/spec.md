@@ -33,7 +33,7 @@ Concepts are the member-facing glossary surface. They expose approved, human-rea
   - support evidence
   - canonical document or generated definition link
   - related concepts
-  - trust and source information for supporting evidence
+  - trust and source information for supporting evidence, where `source_url` follows the shared `https | generic | null` contract and only `https://...` is outbound
 - Evidence-only sources can contribute support evidence, but the concept surface is still a member-facing read surface rather than an operational dashboard.
 - Member and anonymous concept detail views include only support rows backed by `member_visible` documents.
 - Current-workspace owners and admins may see evidence-only support rows on direct concept detail reads so review links keep working without a separate admin-only concept route.

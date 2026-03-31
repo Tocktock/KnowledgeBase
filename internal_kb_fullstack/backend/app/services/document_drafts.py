@@ -21,6 +21,7 @@ from app.schemas.documents import (
 from app.schemas.search import SearchHit, SearchRequest
 from app.services.glossary import concept_search_key, get_concept_support_hits, resolve_concept
 from app.services.search import hybrid_search
+from app.services.source_urls import canonicalize_source_url
 from app.services.trust import build_search_hit_trust
 
 SECTION_TITLES = (
@@ -225,6 +226,21 @@ def _reference_from_hit(hit: SearchHit) -> DefinitionDraftReference:
     )
 
 
+def _canonical_reference_source_url(
+    *,
+    source_system: str,
+    source_url: str | None,
+    source_external_id: str | None = None,
+    document_slug: str | None = None,
+) -> str | None:
+    return canonicalize_source_url(
+        source_system=source_system,
+        source_url=source_url,
+        source_external_id=source_external_id,
+        slug=document_slug,
+    )
+
+
 def _family_key_for_reference(reference: DefinitionDraftReference) -> str:
     return concept_search_key(reference.document_title or reference.document_slug)
 
@@ -279,7 +295,12 @@ def _reference_candidates_from_support_rows(rows: Iterable[dict[str, object]]) -
             document_title=str(row["document_title"]),
             document_slug=str(row["document_slug"]),
             source_system=str(row["source_system"]),
-            source_url=row.get("source_url"),
+            source_url=_canonical_reference_source_url(
+                source_system=str(row["source_system"]),
+                source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
+                source_external_id=row.get("source_external_id") if isinstance(row.get("source_external_id"), str) else None,
+                document_slug=str(row["document_slug"]),
+            ),
             section_title=row.get("section_title"),
             heading_path=list(row.get("heading_path") or []),
             excerpt=excerpt,
@@ -407,6 +428,7 @@ async def fetch_exact_reference_hits(
             Document.title.label("document_title"),
             Document.slug.label("document_slug"),
             Document.source_system.label("source_system"),
+            Document.source_external_id.label("source_external_id"),
             Document.source_url.label("source_url"),
             Document.last_ingested_at.label("last_synced_at"),
             DocumentChunk.section_title.label("section_title"),
@@ -438,19 +460,31 @@ async def fetch_exact_reference_hits(
     )
 
     result = await session.execute(query)
-    return [
-        SearchHit(
-            **row,
-            trust=build_search_hit_trust(
-                source_system=row["source_system"],
-                source_url=row["source_url"],
-                last_synced_at=row["last_synced_at"],
-                evidence_count=row["evidence_count"],
-                matched_concept=False,
-            ),
+    hits: list[SearchHit] = []
+    for row in result.mappings().all():
+        row_data = dict(row)
+        source_url = _canonical_reference_source_url(
+            source_system=row_data["source_system"],
+            source_url=row_data["source_url"],
+            source_external_id=row_data["source_external_id"],
+            document_slug=row_data["document_slug"],
         )
-        for row in result.mappings().all()
-    ]
+        row_data["source_url"] = source_url
+        hits.append(
+            SearchHit(
+                **row_data,
+                trust=build_search_hit_trust(
+                    source_system=row_data["source_system"],
+                    source_url=source_url,
+                    source_external_id=row_data["source_external_id"],
+                    slug=row_data["document_slug"],
+                    last_synced_at=row_data["last_synced_at"],
+                    evidence_count=row_data["evidence_count"],
+                    matched_concept=False,
+                ),
+            )
+        )
+    return hits
 
 
 async def gather_definition_reference_candidates(

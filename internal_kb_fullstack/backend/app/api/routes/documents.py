@@ -36,6 +36,7 @@ from app.services.document_drafts import (
 from app.services.ingest import SlugConflictError, ingest_document
 from app.services.jobs import request_document_reindex
 from app.services.parser import DocumentParser
+from app.services.source_urls import canonicalize_source_url
 from app.services.auth import AuthenticatedUser
 from app.services.trust import build_document_trust
 from app.services.wiki_graph import extract_heading_items, extract_internal_slugs, get_document_relations
@@ -65,11 +66,17 @@ def _viewer_can_include_evidence_only(
 
 
 def _document_summary(document: Document) -> DocumentSummary:
+    canonical_source_url = canonicalize_source_url(
+        source_system=document.source_system,
+        source_url=document.source_url,
+        source_external_id=document.source_external_id,
+        slug=document.slug,
+    )
     return DocumentSummary(
         id=document.id,
         source_system=document.source_system,
         source_external_id=document.source_external_id,
-        source_url=document.source_url,
+        source_url=canonical_source_url,
         slug=document.slug,
         title=document.title,
         language_code=document.language_code,
@@ -84,7 +91,9 @@ def _document_summary(document: Document) -> DocumentSummary:
         last_ingested_at=document.last_ingested_at,
         trust=build_document_trust(
             source_system=document.source_system,
-            source_url=document.source_url,
+            source_url=canonical_source_url,
+            source_external_id=document.source_external_id,
+            slug=document.slug,
             last_synced_at=document.last_ingested_at,
             doc_type=document.doc_type,
         ),
@@ -129,13 +138,23 @@ def _slug_conflict_detail(document: Document) -> dict[str, object]:
 
 
 def _document_list_item(row: dict[str, object]) -> DocumentListItem:
+    row_data = dict(row)
+    canonical_source_url = canonicalize_source_url(
+        source_system=str(row_data.get("source_system") or ""),
+        source_url=row_data.get("source_url") if isinstance(row_data.get("source_url"), str) else None,
+        source_external_id=row_data.get("source_external_id") if isinstance(row_data.get("source_external_id"), str) else None,
+        slug=row_data.get("slug") if isinstance(row_data.get("slug"), str) else None,
+    )
+    row_data["source_url"] = canonical_source_url
     return DocumentListItem(
-        **row,
+        **row_data,
         trust=build_document_trust(
-            source_system=str(row.get("source_system") or ""),
-            source_url=row.get("source_url") if isinstance(row.get("source_url"), str) else None,
-            last_synced_at=row.get("last_ingested_at"),  # type: ignore[arg-type]
-            doc_type=row.get("doc_type") if isinstance(row.get("doc_type"), str) else None,
+            source_system=str(row_data.get("source_system") or ""),
+            source_url=canonical_source_url,
+            source_external_id=row_data.get("source_external_id") if isinstance(row_data.get("source_external_id"), str) else None,
+            slug=row_data.get("slug") if isinstance(row_data.get("slug"), str) else None,
+            last_synced_at=row_data.get("last_ingested_at"),  # type: ignore[arg-type]
+            doc_type=row_data.get("doc_type") if isinstance(row_data.get("doc_type"), str) else None,
         ),
     )
 

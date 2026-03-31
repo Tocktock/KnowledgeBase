@@ -39,6 +39,9 @@ Search results, document detail, and concept-linked evidence share a normalized 
 
 - `source_label`
 - `source_url`
+  - `https://...` means an external original source and is the only clickable outbound form
+  - `generic://<source_system>/<percent-encoded locator>` means normalized provenance text for internal or pseudo-sources
+  - `null` means no stable source URL is available
 - `authority_kind`
 - `last_synced_at`
 - `freshness_state`
@@ -57,14 +60,16 @@ Search results, document detail, and concept-linked evidence share a normalized 
   - direct slug routes open the canonical document detail page
 - Docs detail:
   - the page foregrounds provenance, freshness, and related concepts
-  - when an original source URL exists, the user can navigate back to it
+  - when an external HTTPS source URL exists, the user can navigate back to it
+  - otherwise the page shows normalized provenance text without leaving the app
 - No-results:
   - authenticated users can pivot to manual authoring through `/new`
 
 ## Document detail rules
 
 - Document detail should foreground provenance, freshness, and related concepts.
-- When a canonical source URL exists, the detail page should link back to the original location.
+- When an external HTTPS source URL exists, the detail page should link back to the original location.
+- When provenance is `generic://...`, the detail page should show the value as non-clickable provenance text.
 - Trust and provenance should be visible without requiring the user to inspect operational pages.
 - When admins directly open an `evidence_only` document, outgoing links, backlinks, and related documents follow the same role-sensitive visibility mode for that request.
 

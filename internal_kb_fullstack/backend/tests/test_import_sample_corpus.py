@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from pathlib import Path
+
+import pytest
 
 from scripts import import_sample_corpus
 
@@ -32,3 +35,41 @@ def test_build_corpus_file_extracts_title_slug_and_owner_team(tmp_path: Path) ->
     assert corpus_file.doc_type == "data"
     assert corpus_file.content_type == "text"
     assert corpus_file.owner_team == "product"
+
+
+@pytest.mark.asyncio
+async def test_import_corpus_uses_source_external_id_as_provenance_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "sendy"
+    path = root / "Product Home" / "Spec abcdef1234.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("# Spec", encoding="utf-8")
+    captured = {}
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(import_sample_corpus, "get_session_factory", lambda: (lambda: SessionContext()))
+
+    async def fake_ingest_document(_session, payload):
+        captured["payload"] = payload
+        return SimpleNamespace(unchanged=False)
+
+    monkeypatch.setattr(import_sample_corpus, "ingest_document", fake_ingest_document)
+
+    result = await import_sample_corpus.import_corpus(
+        root=root,
+        source_system="notion-export",
+        import_batch="sample-data-sendy-knowledge",
+        refresh_glossary=False,
+        skip_if_detected=False,
+        detection_threshold=1,
+    )
+
+    payload = captured["payload"]
+    assert result["imported"] == 1
+    assert payload.source_external_id == "Product Home/Spec abcdef1234.md"
+    assert payload.source_url is None

@@ -31,6 +31,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { getDisplaySourceUrl, getOutboundSourceUrl } from '@/lib/source-urls'
 import type {
   AuthMeResponse,
   ConnectorBrowseItem,
@@ -1695,11 +1696,19 @@ function ConnectionManager({
                     {item.mime_type ? <Badge>{item.mime_type}</Badge> : null}
                   </div>
                   <div className="mt-1 text-xs text-neutral-400">최근 확인 {formatDate(item.last_synced_at)}</div>
-                  {item.source_url ? (
-                    <Link href={item.source_url} target="_blank" className="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
-                      원본 열기 <ExternalLink className="size-3.5" />
-                    </Link>
-                  ) : null}
+                  {(() => {
+                    const sourceUrl = getDisplaySourceUrl(item.source_url)
+                    const outboundSourceUrl = getOutboundSourceUrl(sourceUrl)
+                    if (!sourceUrl) return null
+                    if (!outboundSourceUrl) {
+                      return <div className="mt-2 break-all text-xs text-neutral-500 dark:text-neutral-400">출처 {sourceUrl}</div>
+                    }
+                    return (
+                      <Link href={outboundSourceUrl} target="_blank" className="mt-2 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
+                        원본 열기 <ExternalLink className="size-3.5" />
+                      </Link>
+                    )
+                  })()}
                   {item.unsupported_reason ? <div className="mt-2 text-sm text-amber-600 dark:text-amber-400">{item.unsupported_reason}</div> : null}
                   {item.error_message ? <div className="mt-2 text-sm text-red-600 dark:text-red-400">{item.error_message}</div> : null}
                 </div>

@@ -214,6 +214,9 @@ Important workspace rule:
 - Purpose: inspect synced items associated with a resource.
 - Caller: same access rules as connection detail.
 - Response model: synced item list shape defined in `connectors.py`
+- Important behavior:
+  - item `source_url` follows the shared `https | generic | null` contract
+  - only `https://...` is treated as an outbound original-source link
 
 ## Provider-specific contract notes
 

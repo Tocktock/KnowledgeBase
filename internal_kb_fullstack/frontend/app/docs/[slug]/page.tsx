@@ -8,6 +8,7 @@ import { TrustBadges } from '@/components/trust/trust-badges'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { getDocumentBySlug, getDocumentRelations } from '@/lib/api/server'
+import { getDisplaySourceUrl, getOutboundSourceUrl } from '@/lib/source-urls'
 import type { DocumentRelationsResponse } from '@/lib/types'
 import {
   formatAuthorityKindLabel,
@@ -27,6 +28,8 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
   const markdown = data.content_markdown ?? data.content_text ?? ''
   const headings = data.headings
   const linkedSlugs = data.linked_slugs
+  const sourceUrl = getDisplaySourceUrl(data.document.source_url)
+  const outboundSourceUrl = getOutboundSourceUrl(sourceUrl)
   const conceptLinks = [...relations.outgoing, ...relations.related, ...relations.backlinks].filter(
     (item, index, all) =>
       item.doc_type === 'glossary' && all.findIndex((candidate) => candidate.id === item.id) === index,
@@ -54,12 +57,16 @@ export default async function DocumentPage({ params }: { params: Promise<{ slug:
           <div className="mt-4">
             <TrustBadges trust={data.document.trust} showSourceLink={Boolean(data.document.trust.source_url)} />
           </div>
-          {data.document.source_url ? (
+          {sourceUrl ? (
             <div className="mt-4 text-sm text-neutral-500">
-              원본 링크:{' '}
-              <a className="break-all text-blue-600 underline decoration-blue-200 underline-offset-4 dark:text-blue-400" href={data.document.source_url} target="_blank" rel="noreferrer">
-                {data.document.source_url}
-              </a>
+              {outboundSourceUrl ? '원본 링크:' : '출처:'}{' '}
+              {outboundSourceUrl ? (
+                <a className="break-all text-blue-600 underline decoration-blue-200 underline-offset-4 dark:text-blue-400" href={outboundSourceUrl} target="_blank" rel="noreferrer">
+                  {sourceUrl}
+                </a>
+              ) : (
+                <span className="break-all text-neutral-600 dark:text-neutral-400">{sourceUrl}</span>
+              )}
             </div>
           ) : null}
         </Card>

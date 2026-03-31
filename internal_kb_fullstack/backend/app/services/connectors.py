@@ -70,6 +70,7 @@ from app.schemas.jobs import JobSummary
 from app.services.auth import AuthenticatedUser
 from app.services.ingest import ingest_document
 from app.services.parser import DocumentParser
+from app.services.source_urls import canonicalize_source_url, connector_document_source_system
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -396,14 +397,20 @@ def _resource_summary(resource: ConnectorResource) -> ConnectorResourceSummary:
     )
 
 
-def _source_item_summary(item: ConnectorSourceItem) -> ConnectorSourceItemSummary:
+def _source_item_summary(item: ConnectorSourceItem, *, source_system: str | None) -> ConnectorSourceItemSummary:
+    canonical_source_url = canonicalize_source_url(
+        source_system=source_system,
+        source_url=item.source_url,
+        source_external_id=item.external_item_id,
+        slug=item.name,
+    )
     return ConnectorSourceItemSummary(
         id=item.id,
         resource_id=item.resource_id,
         external_item_id=item.external_item_id,
         mime_type=item.mime_type,
         name=item.name,
-        source_url=item.source_url,
+        source_url=canonical_source_url,
         source_revision_id=item.source_revision_id,
         internal_document_id=item.internal_document_id,
         item_status=item.item_status,
@@ -413,6 +420,10 @@ def _source_item_summary(item: ConnectorSourceItem) -> ConnectorSourceItemSummar
         last_synced_at=item.last_synced_at,
         provider_metadata=dict(item.provider_metadata or {}),
     )
+
+
+def _source_item_source_system(connection: ConnectorConnection, resource: ConnectorResource) -> str:
+    return connector_document_source_system(connection.provider, selection_mode=resource.selection_mode)
 
 
 def _provider_readiness_summary(
@@ -2182,6 +2193,14 @@ async def list_source_items(
     connection_id: UUID,
 ) -> list[ConnectorSourceItemSummary]:
     connection = await _get_connection_or_raise(session, connection_id, auth_user)
+    resources = list(
+        (
+            await session.execute(
+                select(ConnectorResource).where(ConnectorResource.connection_id == connection.id)
+            )
+        ).scalars().all()
+    )
+    resources_by_id = {resource.id: resource for resource in resources}
     items = list(
         (
             await session.execute(
@@ -2192,7 +2211,13 @@ async def list_source_items(
             )
         ).scalars().all()
     )
-    return [_source_item_summary(item) for item in items]
+    return [
+        _source_item_summary(
+            item,
+            source_system=_source_item_source_system(connection, resources_by_id[item.resource_id]) if item.resource_id in resources_by_id else None,
+        )
+        for item in items
+    ]
 
 
 async def enqueue_connector_sync_job(
@@ -2361,6 +2386,7 @@ async def mark_connector_job_completed(session: AsyncSession, job_id: UUID, payl
 async def _upsert_source_item(
     session: AsyncSession,
     *,
+    source_system: str,
     connection_id: UUID,
     resource_id: UUID,
     item: PreparedSyncItem,
@@ -2369,6 +2395,12 @@ async def _upsert_source_item(
     unsupported_reason: str | None = None,
     error_message: str | None = None,
 ) -> ConnectorSourceItem:
+    canonical_source_url = canonicalize_source_url(
+        source_system=source_system,
+        source_url=item.source_url,
+        source_external_id=item.external_item_id,
+        slug=_stable_document_slug(item.title, item.external_item_id),
+    )
     row = (
         await session.execute(
             select(ConnectorSourceItem).where(
@@ -2385,7 +2417,7 @@ async def _upsert_source_item(
             external_item_id=item.external_item_id,
             mime_type=item.mime_type,
             name=item.title,
-            source_url=item.source_url,
+            source_url=canonical_source_url,
             source_revision_id=item.source_revision_id,
             internal_document_id=document_id,
             item_status=status,
@@ -2399,7 +2431,7 @@ async def _upsert_source_item(
     else:
         row.mime_type = item.mime_type
         row.name = item.title
-        row.source_url = item.source_url
+        row.source_url = canonical_source_url
         row.source_revision_id = item.source_revision_id
         row.internal_document_id = document_id
         row.item_status = status
@@ -2449,6 +2481,7 @@ async def _ingest_sync_items_for_resource(
 ) -> dict[str, int]:
     seen_ids = {item.external_item_id for item in sync_items}
     counts = {"imported": 0, "unchanged": 0, "unsupported": 0, "failed": 0, "deleted": 0}
+    source_system = _source_item_source_system(connection, resource)
 
     for item in sync_items:
         try:
@@ -2456,6 +2489,7 @@ async def _ingest_sync_items_for_resource(
                 counts["unsupported"] += 1
                 await _upsert_source_item(
                     session,
+                    source_system=source_system,
                     connection_id=connection.id,
                     resource_id=resource.id,
                     item=item,
@@ -2470,18 +2504,15 @@ async def _ingest_sync_items_for_resource(
                 raise ConnectorError("Extracted content is empty.")
 
             payload = IngestDocumentRequest(
-                source_system=(
-                    "google-drive"
-                    if connection.provider == ConnectorProvider.google_drive.value
-                    else "github"
-                    if connection.provider == ConnectorProvider.github.value
-                    else "notion-export"
-                    if resource.selection_mode == "export_upload"
-                    else "notion"
-                ),
+                source_system=source_system,
                 source_external_id=item.external_item_id,
                 source_revision_id=item.source_revision_id,
-                source_url=item.source_url,
+                source_url=canonicalize_source_url(
+                    source_system=source_system,
+                    source_url=item.source_url,
+                    source_external_id=item.external_item_id,
+                    slug=_stable_document_slug(item.title, item.external_item_id),
+                ),
                 slug=_stable_document_slug(item.title, item.external_item_id),
                 title=item.title,
                 content_type=item.content_type,  # type: ignore[arg-type]
@@ -2509,6 +2540,7 @@ async def _ingest_sync_items_for_resource(
             counts["unchanged" if result.unchanged else "imported"] += 1
             await _upsert_source_item(
                 session,
+                source_system=source_system,
                 connection_id=connection.id,
                 resource_id=resource.id,
                 item=item,
@@ -2519,6 +2551,7 @@ async def _ingest_sync_items_for_resource(
             counts["unsupported"] += 1
             await _upsert_source_item(
                 session,
+                source_system=source_system,
                 connection_id=connection.id,
                 resource_id=resource.id,
                 item=item,
@@ -2531,6 +2564,7 @@ async def _ingest_sync_items_for_resource(
             counts["failed"] += 1
             await _upsert_source_item(
                 session,
+                source_system=source_system,
                 connection_id=connection.id,
                 resource_id=resource.id,
                 item=item,

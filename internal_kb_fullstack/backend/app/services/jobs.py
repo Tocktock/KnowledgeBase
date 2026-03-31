@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.utils import utcnow
-from app.db.models import ConnectorResource, ConnectorSyncJob, Document, EmbeddingJob, GlossaryJob, JobStatus, KnowledgeConcept
+from app.db.models import ConnectorConnection, ConnectorResource, ConnectorSyncJob, Document, EmbeddingJob, GlossaryJob, JobStatus, KnowledgeConcept
 from app.schemas.jobs import JobSummary
 from app.services.catalog import get_document_detail
 
@@ -67,7 +67,12 @@ async def request_document_reindex(
     workspace_id: UUID | None,
     priority: int,
 ) -> EmbeddingJob | None:
-    document, revision, _chunks = await get_document_detail(session, document_id, workspace_id=workspace_id)
+    document, revision, _chunks = await get_document_detail(
+        session,
+        document_id,
+        workspace_id=workspace_id,
+        include_evidence_only=True,
+    )
     if document is None or revision is None:
         return None
 

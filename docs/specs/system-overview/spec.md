@@ -73,12 +73,16 @@ Shared user-facing trust fields:
 
 - `source_label`
 - `source_url`
+  - `https://...` for an external original source
+  - `generic://<source_system>/<percent-encoded locator>` for internal or pseudo-source provenance
+  - `null` when no stable provenance value exists
 - `authority_kind`
 - `last_synced_at`
 - `freshness_state`
 - `evidence_count`
 
 The trust model must be consistent across Search, Docs, and Concepts.
+Only `https://...` renders as an outbound link. `generic://...` renders as provenance text.
 
 Glossary surfaces add a second verification layer that must stay consistent across Home, Glossary, and Knowledge QA:
 
